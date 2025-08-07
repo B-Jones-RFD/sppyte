@@ -4,6 +4,9 @@ __pycache__/
 *.pyd
 *.pyo
 
+# Builds
+dist/
+
 # Virtual environment
 venv/
 env/
@@ -28,3 +31,6 @@ env/
 
 # Test-related files
 .pytest_cache/
+
+# Various caches
+.*_cache/
