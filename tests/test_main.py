@@ -2,8 +2,10 @@ from sppyte.main import hello
 
 
 def test_runner():
-    assert 1 == 1
+    expected = 1
+    assert expected == 1
 
 
 def test_hello():
-    assert hello() == "world"
+    expected = "world"
+    assert hello() == expected
