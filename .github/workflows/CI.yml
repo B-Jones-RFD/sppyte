@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"] # Specify Python versions to test against
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - name: Checkout code
@@ -23,9 +23,6 @@ jobs:
 
       - name: Install Hatch
         run: pip install hatch
-
-      - name: Install dependencies with Hatch
-        run: hatch env prune && hatch env restore
 
       - name: Run linting with Hatch
         run: hatch fmt
