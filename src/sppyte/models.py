@@ -1,27 +1,39 @@
-import api
-
+from requests import Session
 from urllib.parse import urljoin
-from utils import get_hostname
-
-hostname = get_hostname()
+import typing
 
 
-class Connection:
+import api
+from error import ConnectionError
+
+
+class Site:
+    session: Session | None = None
+
     def __init__(
         self,
         host: str,
-        relative_url: str,
+        site_relative_url: str,
         username: str,
         password: str,
-        domain: str | None = None,
     ):
-        self.site_path = urljoin(host, relative_url)
-        self.domain = domain
-        self.hostname = hostname
-        self.session = api.session(username, password, domain)
+        self.site_path = urljoin(host, site_relative_url)
+        self.username = username
+        self.password = password
+
+    def __enter__(self) -> None:
+        self.session = api.session(self.username, self.password, self.site_path)
+
+    def __exit__(self) -> None:
+        if self.session is not None:
+            self.session.close()
 
     def __del__(self) -> None:
-        self.session.close()
+        if self.session is not None:
+            self.session.close()
+
+    def connect(self) -> None:
+        self.session = api.session(self.username, self.password)
 
     def list(self, name: str):
         return List(name, self)
@@ -29,16 +41,31 @@ class Connection:
     def library(self, name: str):
         return Library(name, self)
 
-    def get_token(self) -> str:
-        return "some_token"
-
     def get_form_digest(self) -> str:
-        return "some_digest_value"
+        try:
+            if self.session is None:
+                raise ConnectionError(
+                    "Session not started. Call connect or use with statement."
+                )
+            headers = {
+                "Accept": "application/json;odata=verbose",
+                "Content-Type": "application/json;odata=verbose",
+            }
+            resource = urljoin(self.site_path, "/_api/contextinfo")
+            res = self.session.post(
+                url=resource,
+                data="",
+                headers=headers,
+            )
+            res.json().get()
+            return "some_digest_value"
+        except Exception as e:
+            print(e)
 
 
 class List:
-    def __init__(self, name: str, connection: Connection):
-        self.connection = connection
+    def __init__(self, name: str, site: Site):
+        self.site = site
         self.name = name
 
     def add(self, item: str) -> int:
@@ -50,13 +77,19 @@ class List:
     def delete(self, id: int) -> None:
         pass
 
+    def get_contents(self) -> typing.List:
+        pass
+
+    def get(self, id: int):
+        pass
+
     def update(self, id: int, item: str) -> int:
         return 1
 
 
 class Library:
-    def __init__(self, name: str, connection: Connection):
-        self.connection = connection
+    def __init__(self, name: str, site: Site):
+        self.site = site
         self.name = name
 
     def add_folder(self, folder: str):

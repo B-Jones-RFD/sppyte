@@ -1,11 +1,12 @@
-from models import Connection
+from models import Site
 
 
-def connect(
+def site_connection(
     host: str,
-    relative_url: str,
+    site_relative_url: str,
     username: str,
     password: str,
-    domain: str | None = None,
-) -> Connection:
-    return Connection(host, relative_url, username, password, domain)
+) -> Site:
+    manager = Site(host, site_relative_url, username, password)
+    manager.connect()
+    return manager
