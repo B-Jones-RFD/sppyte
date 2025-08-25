@@ -4,11 +4,5 @@ class Error(Exception):
         self.message = message
 
 
-class AuthenticationError(Error):
-    def __init__(message: str):
-        super(message)
-
-
-class ConnectionError(Error):
-    def __init__(message: str):
-        super(message)
+class ResponseFormatError(Error):
+    pass

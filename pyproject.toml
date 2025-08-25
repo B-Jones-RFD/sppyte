@@ -22,7 +22,9 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["requests-ntlm"]
+dependencies = [
+    "requests-ntlm",
+]
 
 [project.urls]
 Documentation = "https://github.com/B-Jones-RFD/sppyte#readme"

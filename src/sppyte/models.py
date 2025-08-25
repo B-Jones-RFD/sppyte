@@ -1,14 +1,13 @@
-from requests import Session
-from urllib.parse import urljoin
-import typing
+from io import BufferedReader
+from requests import Session, Response
+from requests_ntlm import HttpNtlmAuth
 
-
-import api
-from error import ConnectionError
+import utils
 
 
 class Site:
     session: Session | None = None
+    form_digest: str | None = None
 
     def __init__(
         self,
@@ -17,50 +16,56 @@ class Site:
         username: str,
         password: str,
     ):
-        self.site_path = urljoin(host, site_relative_url)
+        self.site_path = f"{host.rstrip('/')}/{site_relative_url.strip('/')}"
+        self.relative_url = site_relative_url
         self.username = username
         self.password = password
+        self.connect()
 
     def __enter__(self) -> None:
-        self.session = api.session(self.username, self.password, self.site_path)
+        return self
 
-    def __exit__(self) -> None:
-        if self.session is not None:
-            self.session.close()
+    def __exit__(self, *args) -> None:
+        self.close()
 
-    def __del__(self) -> None:
-        if self.session is not None:
-            self.session.close()
+    def request(self, method, path, **kwargs) -> Response:
+        url = f"{self.site_path.rstrip('/')}/{path.strip('/')}"
+        r = self.session.request(method, url, **kwargs)
+        r.raise_for_status()
+        return r
+
+    def get_form_digest(self) -> str:
+        r = self.request(
+            method="post",
+            path="/_api/contextinfo",
+            headers={
+                "Accept": "application/json;odata=verbose",
+                "Content-Type": "application/json;odata=verbose",
+            },
+            data="",
+        )
+        form_digest = utils.parse_form_digest(r)
+        return form_digest
 
     def connect(self) -> None:
-        self.session = api.session(self.username, self.password)
+        session = Session()
+        session.auth = HttpNtlmAuth(self.username, self.password)
+        self.session = session
+        self.form_digest = self.get_form_digest()
+
+    def close(self) -> None:
+        if self.session is not None:
+            self.session.close()
 
     def list(self, name: str):
+        if self.session is None:
+            self.connect()
         return List(name, self)
 
     def library(self, name: str):
+        if self.session is None:
+            self.connect()
         return Library(name, self)
-
-    def get_form_digest(self) -> str:
-        try:
-            if self.session is None:
-                raise ConnectionError(
-                    "Session not started. Call connect or use with statement."
-                )
-            headers = {
-                "Accept": "application/json;odata=verbose",
-                "Content-Type": "application/json;odata=verbose",
-            }
-            resource = urljoin(self.site_path, "/_api/contextinfo")
-            res = self.session.post(
-                url=resource,
-                data="",
-                headers=headers,
-            )
-            res.json().get()
-            return "some_digest_value"
-        except Exception as e:
-            print(e)
 
 
 class List:
@@ -68,23 +73,100 @@ class List:
         self.site = site
         self.name = name
 
-    def add(self, item: str) -> int:
-        return 1
+    def add_item(self, item: dict[str, any]) -> int:
+        if "__metadata" not in item:
+            item_type = self.get_item_type()
+            item["__metadata"] = {"type": item_type}
 
-    def add_attachment(self, id: int, attachment) -> int:
-        return 1
+        r = self.site.request(
+            method="post",
+            path=f"_api/web/lists/GetByTitle('{self.name}')/items",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json;odata=verbose",
+                "X-RequestDigest": self.site.form_digest,
+            },
+            json=item,
+        )
+        return utils.parse_add_item(r)
 
-    def delete(self, id: int) -> None:
-        pass
+    def add_attachment(self, sp_id: int, file_name: str, attachment) -> int:
+        self.site.request(
+            method="post",
+            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')/AttachmentFiles/add(FileName='{file_name}')",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json;odata=verbose",
+                "X-RequestDigest": self.site.form_digest,
+            },
+            data=attachment,
+        )
+        return sp_id
 
-    def get_contents(self) -> typing.List:
-        pass
+    def delete_item(self, sp_id: int) -> bool:
+        self.site.request(
+            method="post",
+            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')",
+            headers={
+                "Accept": "application/json;odata=verbose",
+                "Content-Type": "application/json;odata=verbose",
+                "X-HTTP-Method": "DELETE",
+                "If-Match": "*",
+                "X-RequestDigest": self.site.form_digest,
+            },
+        )
+        return True
 
-    def get(self, id: int):
-        pass
+    def get_contents(self, **params):
+        r = self.site.request(
+            method="get",
+            path=f"_api/web/lists/GetByTitle('{self.name}')/items",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+            },
+            params=params,
+        )
+        return r.json()
 
-    def update(self, id: int, item: str) -> int:
-        return 1
+    def get_item_type(self) -> str:
+        r = self.site.request(
+            method="get",
+            path=f"_api/web/lists/GetByTitle('{self.name}')",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+            },
+            params={"$select": "ListItemEntityTypeFullName"},
+        )
+        return utils.parse_item_type(r)
+
+    def get_item(self, sp_id: int):
+        r = self.site.request(
+            method="get",
+            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+            },
+        )
+        return r.json()
+
+    def update_item(self, sp_id: int, patch: dict[str, any]) -> int:
+        if "__metadata" not in patch:
+            item_type = self.get_item_type()
+            patch["__metadata"] = {"type": item_type}
+
+        self.site.request(
+            method="post",
+            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json;odata=verbose",
+                "X-HTTP-Method": "MERGE",
+                "If-Match": "*",
+                "X-RequestDigest": self.site.form_digest,
+            },
+            json=patch,
+        )
+        return sp_id
 
 
 class Library:
@@ -92,20 +174,93 @@ class Library:
         self.site = site
         self.name = name
 
-    def add_folder(self, folder: str):
-        pass
+    def add_folder(self, folder: str, *subfolders: str):
+        folder_relative_url = utils.build_path(folder, *subfolders)
 
-    def add(self, folder: str, file_name: str, document):
-        pass
+        r = self.site.request(
+            method="post",
+            path="_api/web/folders",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/json",
+                "X-RequestDigest": self.site.form_digest,
+            },
+            json={
+                "ServerRelativeUrl": self.name + folder_relative_url,
+            },
+        )
+        return r.json().get("Exists", False)
 
-    def folder_exists(self, folder: str):
-        pass
+    def add_document(
+        self,
+        file_name: str,
+        document: BufferedReader,
+        *subfolders: str,
+    ) -> str:
+        r = self.site.request(
+            method="post",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *subfolders)}')/Files/add(url='{file_name}',overwrite=true)",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+                "Content-Type": "application/octet-stream",
+                "X-RequestDigest": self.site.form_digest,
+            },
+            data=document,
+        )
+        return utils.parse_add_document(r)
 
-    def delete_document(self, folder: str, file_name: str):
-        pass
+    def folder_exists(self, folder, *subfolders: str) -> bool:
+        r = self.site.request(
+            method="get",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, folder, *subfolders)}')/Exists",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+            },
+        )
+        return r.json().get("value", False)
 
-    def get_contents(self, folder: str):
-        pass
+    def delete_document(self, file_name: str, *subfolders: str) -> bool:
+        self.site.request(
+            method="post",
+            path=f"_api/web/GetFileByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *subfolders, file_name)}')",
+            headers={
+                "If-Match": "*",
+                "X-HTTP-Method": "DELETE",
+                "X-RequestDigest": self.site.form_digest,
+            },
+        )
+        return True
 
-    def get(self, folder: str, file_name: str):
-        pass
+    def delete_folder(self, folder, *subfolders: str) -> bool:
+        self.site.request(
+            method="post",
+            path=f"_api/web/_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, folder, *subfolders)}')",
+            headers={
+                "If-Match": "*",
+                "X-HTTP-Method": "DELETE",
+                "X-RequestDigest": self.site.form_digest,
+            },
+        )
+        return True
+
+    def list_contents(self, *folders: str, **params):
+        r = self.site.request(
+            method="get",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *folders)}')/Files",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+            },
+            params=params,
+        )
+        return r.json().get("value", [])
+
+    def get_document(self, file_name: str, *folders: str):
+        r = self.site.request(
+            method="get",
+            path=f"/_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *folders)}')/Files('{file_name}')/$value",
+            headers={
+                "Accept": "application/json;odata=nometadata",
+            },
+            stream=True,
+        )
+        return r.content

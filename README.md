@@ -34,7 +34,7 @@ class List:
 class Library:
     add: (folder: str, file_name: str, document) -> bool # Add document to Library
     add_folder: (folder: str) -> bool # Add folder to Library
-    delete_documen: (folder: str, file_name: str) -> bool # Delete document from Libary
+    delete_document: (folder: str, file_name: str) -> bool # Delete document from Libary
     get: (folder: str, file_name: str) -> document
     get_contents: (folder: str) -> List
 ```
@@ -55,5 +55,6 @@ def get_list_contents():
 
     with sppyte.site_connection(host, site_relative_url, username, password) as session:
         contents = session.list('deceased').get()
+        docs = session.library('mystuff').add()
         return contents
 ```
