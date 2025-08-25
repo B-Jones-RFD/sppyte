@@ -11,6 +11,7 @@ dist/
 venv/
 env/
 .venv/
+.devcontainer/
 
 # IDE-specific files
 .vscode/
