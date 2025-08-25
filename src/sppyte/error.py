@@ -6,3 +6,7 @@ class Error(Exception):
 
 class ResponseFormatError(Error):
     pass
+
+
+class SessionError(Error):
+    pass

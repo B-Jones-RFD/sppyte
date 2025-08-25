@@ -22,9 +22,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = [
-    "requests-ntlm",
-]
+dependencies = ["requests-ntlm"]
 
 [project.urls]
 Documentation = "https://github.com/B-Jones-RFD/sppyte#readme"
@@ -37,7 +35,7 @@ path = "src/sppyte/__about__.py"
 [tool.hatch.envs.types]
 extra-dependencies = ["mypy>=1.0.0"]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/sppyte tests}"
+check = "mypy --ignore-missing-imports --install-types --non-interactive {args:src/sppyte tests}"
 
 [tool.coverage.run]
 source_pkgs = ["sppyte", "tests"]

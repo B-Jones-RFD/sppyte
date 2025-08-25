@@ -1,6 +1,5 @@
+from error import ResponseFormatError
 from requests import Response
-
-from .error import ResponseFormatError
 
 
 def build_path(*parts: str):
@@ -9,37 +8,32 @@ def build_path(*parts: str):
 
 
 def parse_form_digest(r: Response) -> str:
-    default = "Not Found"
-    form_digest = (
-        r.json()
-        .get("d", default)
-        .get("GetContextWebInformation", default)
-        .get("FormDigestValue", default)
-    )
-    if form_digest == default:
-        raise ResponseFormatError("Unable parse form digest value.")
+    val = "Form digest value"
+    form_digest = r.json().get("d", val).get("GetContextWebInformation", val).get("FormDigestValue", val)
+    if form_digest == val:
+        raise ResponseFormatError(val)
     return form_digest
 
 
 def parse_item_type(r: Response) -> str:
-    default = "Not Found"
-    item_type = r.json().get("ListItemEntityTypeFullName", default)
-    if item_type == default:
-        raise ResponseFormatError("Unable parse item type value.")
+    val = "List item type"
+    item_type = r.json().get("ListItemEntityTypeFullName", val)
+    if item_type == val:
+        raise ResponseFormatError(val)
     return item_type
 
 
 def parse_add_item(r: Response) -> int:
-    default = "Not Found"
-    item_type = r.json().get("ID", default)
-    if item_type == default:
-        raise ResponseFormatError("Unable parse item type value.")
+    val = "Item id"
+    item_type = r.json().get("ID", val)
+    if item_type == val:
+        raise ResponseFormatError(val)
     return item_type
 
 
 def parse_add_document(r: Response) -> str:
-    default = "Not Found"
-    item_type = r.json().get("UniqueId", default)
-    if item_type == default:
-        raise ResponseFormatError("Unable parse document id value.")
+    val = "Document id"
+    item_type = r.json().get("UniqueId", val)
+    if item_type == val:
+        raise ResponseFormatError(val)
     return item_type

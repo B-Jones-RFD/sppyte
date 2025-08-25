@@ -1,8 +1,14 @@
-from io import BufferedReader
-from requests import Session, Response
-from requests_ntlm import HttpNtlmAuth
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from io import BufferedReader
 
 import utils
+from error import SessionError
+from requests import Response, Session
+from requests_ntlm import HttpNtlmAuth
 
 
 class Site:
@@ -22,7 +28,7 @@ class Site:
         self.password = password
         self.connect()
 
-    def __enter__(self) -> None:
+    def __enter__(self):
         return self
 
     def __exit__(self, *args) -> None:
@@ -30,9 +36,12 @@ class Site:
 
     def request(self, method, path, **kwargs) -> Response:
         url = f"{self.site_path.rstrip('/')}/{path.strip('/')}"
-        r = self.session.request(method, url, **kwargs)
-        r.raise_for_status()
-        return r
+        if type(self.session) is Session:
+            r = self.session.request(method, url, **kwargs)
+            r.raise_for_status()
+            return r
+
+        raise SessionError
 
     def get_form_digest(self) -> str:
         r = self.request(
@@ -44,8 +53,7 @@ class Site:
             },
             data="",
         )
-        form_digest = utils.parse_form_digest(r)
-        return form_digest
+        return utils.parse_form_digest(r)
 
     def connect(self) -> None:
         session = Session()
@@ -73,7 +81,7 @@ class List:
         self.site = site
         self.name = name
 
-    def add_item(self, item: dict[str, any]) -> int:
+    def add_item(self, item: dict[str, Any]) -> int:
         if "__metadata" not in item:
             item_type = self.get_item_type()
             item["__metadata"] = {"type": item_type}
@@ -149,7 +157,7 @@ class List:
         )
         return r.json()
 
-    def update_item(self, sp_id: int, patch: dict[str, any]) -> int:
+    def update_item(self, sp_id: int, patch: dict[str, Any]) -> int:
         if "__metadata" not in patch:
             item_type = self.get_item_type()
             patch["__metadata"] = {"type": item_type}
