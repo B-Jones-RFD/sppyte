@@ -8,7 +8,6 @@ This module provides utility functions that are used in sppyte.
 from typing import TypedDict
 
 from error import ResponseFormatError
-from models import Site
 
 
 # ----------------------------- Types -----------------------------------------
@@ -37,16 +36,6 @@ class AddDocumentResponse(TypedDict):
 
 
 # ----------------------------- Methods ----------------------------------------
-def connection(
-    host: str,
-    site_relative_url: str,
-    username: str,
-    password: str,
-) -> Site:
-    """Helper alias for Site init"""
-    return Site(host, site_relative_url, username, password)
-
-
 def build_path(*parts: str) -> str:
     """
     Join path segments as a normalized server-relative path.

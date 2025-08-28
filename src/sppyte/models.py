@@ -23,7 +23,7 @@ FORBIDDEN = 403
 
 
 Param: TypeAlias = tuple[str, str] | dict[str, str | int]
-Params: TypeAlias = list[Param]
+Params: TypeAlias = list[Param] | None
 
 
 class Site:
@@ -169,9 +169,7 @@ class List:
         )
         return utils.parse_add_item(r.json())
 
-    def add_attachment(
-        self, sp_id: int, file_name: str, attachment: IO[bytes] | bytes
-    ) -> int:
+    def add_attachment(self, sp_id: int, file_name: str, attachment: IO[bytes] | bytes) -> int:
         """
         Add a file attachment to an existing list item.
 
