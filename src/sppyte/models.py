@@ -57,10 +57,9 @@ class Site:
         self.relative_url = site_relative_url
         self.username = username
         self.password = password
-        # Immediately establish the session + obtain form digest.
-        self.connect()
 
     def __enter__(self):
+        self.connect()
         return self
 
     def __exit__(self, *args) -> None:
@@ -144,6 +143,21 @@ class List:
     def __init__(self, name: str, site: Site):
         self.site = site
         self.name = name
+
+    def __enter__(self):
+        self.site.connect()
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.site.close()
+
+    def connect(self) -> None:
+        """Create the NTLM-authenticated session and fetch a form digest."""
+        self.site.connect()
+
+    def close(self) -> None:
+        """Close the underlying HTTP session."""
+        self.site.close()
 
     def add_item(self, item: dict[str, Any]) -> int:
         """
@@ -280,6 +294,21 @@ class Library:
         self.site = site
         self.name = name
 
+    def __enter__(self):
+        self.site.connect()
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.site.close()
+
+    def connect(self) -> None:
+        """Create the NTLM-authenticated session and fetch a form digest."""
+        self.site.connect()
+
+    def close(self) -> None:
+        """Close the underlying HTTP session."""
+        self.site.close()
+
     def add_folder(self, folder: str, *subfolders: str) -> bool:
         """
         Create a (nested) folder path within the library.
@@ -387,7 +416,7 @@ class Library:
         )
         return r.json().get("value", [])
 
-    def get_document(self, file_name: str, *folders: str) -> bytes:
+    def get_document(self, file_name: str, *subfolders: str) -> bytes:
         """
         Download a file's binary contents. Returns bytes.
 
@@ -397,7 +426,7 @@ class Library:
         """
         r = self.site.request(
             method="get",
-            path=f"/_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *folders)}')/Files('{file_name}')/$value",
+            path=f"/_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *subfolders)}')/Files('{file_name}')/$value",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
