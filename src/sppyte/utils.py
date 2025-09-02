@@ -7,7 +7,7 @@ This module provides utility functions that are used in sppyte.
 
 from typing import TypedDict
 
-from error import ResponseFormatError
+from errors import ResponseFormatError
 
 
 # ----------------------------- Types -----------------------------------------

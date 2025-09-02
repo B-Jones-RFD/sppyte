@@ -1,5 +1,5 @@
 """
-requests.error
+requests.errors
 ~~~~~~~~~~~~~~~~~~~
 
 This module contains the set of sppyte exceptions.

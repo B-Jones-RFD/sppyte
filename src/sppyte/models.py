@@ -15,9 +15,10 @@ from __future__ import annotations
 from typing import IO, Any, TypeAlias
 
 import utils
-from error import SessionError
 from requests import Response, Session
 from requests_ntlm import HttpNtlmAuth
+
+from sppyte.errors import SessionError
 
 FORBIDDEN = 403
 
