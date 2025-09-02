@@ -14,11 +14,17 @@ from __future__ import annotations
 
 from typing import IO, Any, TypeAlias
 
-import utils
 from requests import Response, Session
 from requests_ntlm import HttpNtlmAuth
 
 from sppyte.errors import SessionError
+from sppyte.utils import (
+    build_path,
+    parse_add_document,
+    parse_add_item,
+    parse_form_digest,
+    parse_item_type,
+)
 
 FORBIDDEN = 403
 
@@ -105,7 +111,7 @@ class Site:
             },
             data="",
         )
-        return utils.parse_form_digest(r.json())
+        return parse_form_digest(r.json())
 
     def connect(self) -> None:
         """Create the NTLM-authenticated session and fetch a form digest."""
@@ -182,7 +188,7 @@ class List:
             },
             json=item,
         )
-        return utils.parse_add_item(r.json())
+        return parse_add_item(r.json())
 
     def add_attachment(self, sp_id: int, file_name: str, attachment: IO[bytes] | bytes) -> int:
         """
@@ -248,7 +254,7 @@ class List:
             },
             params={"$select": "ListItemEntityTypeFullName"},
         )
-        return utils.parse_item_type(r.json())
+        return parse_item_type(r.json())
 
     def get_item(self, sp_id: int) -> dict[str, Any]:
         """Fetch a single list item by SharePoint ID."""
@@ -316,7 +322,7 @@ class Library:
 
         Returns True if the folder already exists (per API) or was created.
         """
-        folder_relative_url = utils.build_path(folder, *subfolders)
+        folder_relative_url = build_path(folder, *subfolders)
 
         r = self.site.request(
             method="post",
@@ -346,7 +352,7 @@ class Library:
         """
         r = self.site.request(
             method="post",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *subfolders)}')/Files/add(url='{file_name}',overwrite=true)",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders)}')/Files/add(url='{file_name}',overwrite=true)",
             headers={
                 "Accept": "application/json;odata=nometadata",
                 "Content-Type": "application/octet-stream",
@@ -355,13 +361,13 @@ class Library:
             # requests will stream file-like objects efficiently.
             data=document,
         )
-        return utils.parse_add_document(r.json())
+        return parse_add_document(r.json())
 
     def folder_exists(self, folder: str, *subfolders: str) -> bool:
         """Return True if a folder path exists beneath this library."""
         r = self.site.request(
             method="get",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, folder, *subfolders)}')/Exists",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, folder, *subfolders)}')/Exists",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
@@ -376,7 +382,7 @@ class Library:
         """
         self.site.request(
             method="post",
-            path=f"_api/web/GetFileByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *subfolders, file_name)}')",
+            path=f"_api/web/GetFileByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders, file_name)}')",
             headers={
                 "If-Match": "*",  # Ignore current ETag; force delete.
                 "X-HTTP-Method": "DELETE",
@@ -392,7 +398,7 @@ class Library:
         """
         self.site.request(
             method="post",
-            path=f"_api/web/_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, folder, *subfolders)}')",
+            path=f"_api/web/_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, folder, *subfolders)}')",
             headers={
                 "If-Match": "*",
                 "X-HTTP-Method": "DELETE",
@@ -409,7 +415,7 @@ class Library:
         """
         r = self.site.request(
             method="get",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *folders)}')/Files",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *folders)}')/Files",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
@@ -427,7 +433,7 @@ class Library:
         """
         r = self.site.request(
             method="get",
-            path=f"/_api/web/GetFolderByServerRelativeUrl('{utils.build_path(self.site.relative_url, self.name, *subfolders)}')/Files('{file_name}')/$value",
+            path=f"/_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders)}')/Files('{file_name}')/$value",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
