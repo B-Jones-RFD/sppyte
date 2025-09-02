@@ -407,7 +407,7 @@ class Library:
         )
         return True
 
-    def list_contents(self, params: Params = None, *folders: str) -> list[Any]:
+    def list_contents(self, params: Params = None, *subfolders: str) -> list[Any]:
         """
         List file metadata within a folder path. Returns a list of items.
         Accepts OData params such as $select, $top, etc.
@@ -415,7 +415,7 @@ class Library:
         """
         r = self.site.request(
             method="get",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *folders)}')/Files",
+            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders)}')/Files",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
