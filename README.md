@@ -399,7 +399,7 @@ try:
 except HTTPError as e:
   # Deal with errors
 finally:
-  constracts.close() # Close session
+  contracts.close() # Close session
 
 # With context managment is preferred
 with Library('Contracts', site) as contracts:
@@ -531,7 +531,7 @@ bytes - Streamed contents
 
 *Usage:*
 ```py
-document = constracts.get_document("notes.txt", "2025", "January")
+document = contracts.get_document("notes.txt", "2025", "January")
 contents = document.decode()
 ```
 
@@ -582,4 +582,4 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 
 [MIT License](https://github.com/B-Jones-RFD/sp-rest-connect/blob/main/LICENSE)
 
-[^1]: What the deal with this name? <sub>(S)hare(P)oint</sub> <sup>(Py)thon</sup> <sub>Si(te)</sub>
+[^1]: What's the deal with this name? <sub>(S)hare(P)oint</sub> <sup>(Py)thon</sup> <sub>Si(te)</sub>
