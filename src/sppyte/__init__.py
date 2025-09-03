@@ -9,5 +9,5 @@ It purposefully keeps a thin, explicit mapping to REST calls so behavior
 remains transparent and easy to debug.
 """
 
-from .errors import ResponseFormatError, SessionError  # noqa: F401,TID252
-from .models import Library, List, Site  # noqa: F401, TID252
+from sppyte.errors import ResponseFormatError, SessionError  # noqa: F401
+from sppyte.models import Library, List, Site  # noqa: F401

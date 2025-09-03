@@ -6,7 +6,7 @@
 
 # Sppyte
 
-A tiny, explicit Python helper for working with legacy **SharePoint REST** endpoints using and **NTLM** authentication. Sppyte keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
+A tiny, explicit Python helper for working with SharePoint site in Python using legacy **SharePoint REST** endpoints using and **NTLM** authentication. Sppyte[^1] keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
 
 > ⚠️ This client uses **NTLM** (`requests-ntlm`) and is best suited for **SharePoint on-prem** or environments where NTLM is configured. SharePoint Online typically uses different auth flows.
 
@@ -15,7 +15,7 @@ A tiny, explicit Python helper for working with legacy **SharePoint REST** endpo
 - [Features](#features)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
-- [API Overview](#quickstart)
+- [API Overview](#api-overview)
 - [Notes](#notes)
 - [License](#license)
 
@@ -23,13 +23,14 @@ A tiny, explicit Python helper for working with legacy **SharePoint REST** endpo
 
 - Simple `Site` connection with NTLM auth and automatic **form digest** retrieval.
 - `List` helper for:
-  - Add / update (MERGE) / delete items
-  - Use OData params to control item responses
+  - Add / update / delete items
+  - Use [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params to control item responses
   - Add **attachments** to items
 - `Library` helper for:
   - Add / delete **folders**
   - Upload / download / delete **documents**
-  - List folder contents and control output with OData params
+  - List folder contents and control output with [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params
+- Access other [SharePoint REST service](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/get-to-know-the-sharepoint-rest-service) endpoints as needed
 
 ## Installation
 
@@ -54,44 +55,56 @@ with Site(HOST, SITE, USER, PASS) as site:
     # Add an item (metadata type is auto-inferred if omitted)
     new_id = pets.add_item({"Title": "Norweigian Blue"})
 
-    # Update (MERGE) the item
-    pets.update_item(new_id, {"Title": "Polly"})
+    # Update the item (uses MERGE)
+    patch = {"Title": "Polly"} # Fields to be updated
+    pets.update_item(new_id, patch)
 
     # Attach a file
-    with open("notes.txt", "rb") as file_handle:
+    with open("notes.txt", "rb") as file_handle: # Read bytes
         pets.add_attachment(new_id, "notes.txt", file_handle)
 
     # Fetch one item
     item = pets.get_item(new_id)
 
     # Query contents (use any OData params you need)
-    r = pets.get_contents({
+    params = {
         "$select": "Id,Title,Created",
         "$top": 5,
         "$orderby": "Created desc",
-    })
+    }
+    r = pets.get_contents(params)
 
     # Delete the item
     pets.delete_item(new_id)
 
     # --------------- Libraries -------------
-    docs = site.library("Shared Documents")
+    shared_docs = site.library("Shared Documents")
 
     # Ensure a nested folder path exists
-    docs.add_folder("Napping", "2025")
+    shared_docs.add_folder("Napping", "2025")
 
     # Upload a document
     with open("report.pdf", "rb") as file_handle:
-        unique_id = docs.add_document("report.txt", file_handle, "Napping", "2025")
+        unique_id = shared_docs.add_document("report.txt", file_handle)
 
-    # List files in folder
-    files = docs.list_contents({"$select": "Name,TimeCreated"}, "Napping", "2025")
+    # List library files
+    params = {"$select": "Name,TimeCreated"}
+    files = docs.list_contents(params)
+
+    # List files in subfolder
+    folder_files = docs.list_contents(params, "Napping", "2025")
 
     # Download a document
-    document = docs.get_document("report.txt", "Napping", "2025")
-    contents = document.decode()
+    report = docs.get_document("report.txt")
+    contents = report.decode()
+
+    # Download a document in a subfolder (ex: Shared Documents/Napping/2025/report.txt)
+    report = docs.get_document("report.txt", "Napping", "2025")
 
     # Delete a document
+    docs.delete_document("report.txt")
+
+    # Delete a document in a subfolder
     docs.delete_document("report.txt", "Napping", "2025")
 ```
 
@@ -99,11 +112,11 @@ with Site(HOST, SITE, USER, PASS) as site:
 
 ### Site
 
-Models a session connected to a SharePoint site.
+Model a SharePoint site for authentication and access management.
 
 #### sppyte.Site(host, site, username, password)
 
-Initiate a SharePoint site session.
+Configure a SharePoint site connection.
 
 **Parameters**
 - __host__: str - SharePoint site host (protocol://domain)
@@ -120,7 +133,7 @@ __Site__ object
 from sppyte import Site
 
 HOST = "https://sharepoint.example.com"
-SITE = "/sites/Parrots" # relative path
+SITE = "/sites/parrots" # relative path
 USER = "norweigen"
 PASS = "••••••••"
 
@@ -139,8 +152,8 @@ with Site(HOST, SITE, USER, PASS) as connection:
 ```
 **Notes**
 - User should have permissions to the site, library, or list to be accessed. Updates require contribute or higher level access.
-- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception
-- For user managed connections, call the `connect` method to start a session and `close` method to end the session
+- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception.
+- For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
 #### Site.connect()
 
@@ -189,7 +202,7 @@ Models a SharePoint site list.
 
 #### List(name, site)
 
-Create a list connection directly.
+Create a list connection. Useful alternative when you only need to interact with a single list.
 
 **Parameters**
 - __name__ (str): SharePoint list name
@@ -203,7 +216,7 @@ __List__ object
 from sppyte import Site, List
 
 HOST = "https://sharepoint.example.com"
-SITE = "/sites/Parrots" # relative path
+SITE = "/sites/parrots" # relative path
 USER = "norweigian"
 PASS = "••••••••"
 
@@ -226,8 +239,8 @@ with List('Pets', site) as pets:
 
 **Notes**
 - User should have permissions to the list to be accessed. Updates require contribute or higher level access.
-- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception
-- For user managed connections, call the `connect` method to start a session and `close` method to end the session
+- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception.
+- For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
 #### List.connect()
 
@@ -356,11 +369,11 @@ pets.update_item(pet_id, patch)
 
 ### Library
 
-Models a SharePoint site document library.
+Models a SharePoint site document library. 
 
 #### Library(name, site)
 
-Create a document library connection directly.
+Connect to a document library. Useful alternative when you only need to interact with a single library.
 
 **Parameters**
 - __name__ (str): SharePoint library name
@@ -397,8 +410,8 @@ with Library('Contracts', site) as contracts:
 
 **Notes**
 - User should have permissions to the library to be accessed. Updates require contribute or higher level access.
-- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception
-- For user managed connections, call the `connect` method to start a session and `close` method to end the session
+- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception.
+- For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
 #### Library.connect()
 
@@ -571,3 +584,5 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 ## License
 
 [MIT License](https://github.com/B-Jones-RFD/sp-rest-connect/blob/main/LICENSE)
+
+[^1]: What the deal with this name? <sub>(S)hare(P)oint</sub> <sup>(Py)thon</sup> <sub>Si(te)</sub>
