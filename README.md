@@ -22,11 +22,11 @@ A tiny, explicit Python helper for working with SharePoint site in Python using 
 ## Features
 
 - Simple `Site` connection with NTLM auth and automatic **form digest** retrieval.
-- `List` helper for:
+- `List` helper to:
   - Add / update / delete items
   - Use [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params to control item responses
   - Add **attachments** to items
-- `Library` helper for:
+- `Library` helper to:
   - Add / delete **folders**
   - Upload / download / delete **documents**
   - List folder contents and control output with [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params
