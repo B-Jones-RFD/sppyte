@@ -554,7 +554,7 @@ except (ResponseFormatError, SessionError) as e:
 
 ### Extension methods 
 
-SharePoint REST services endpoints not explicitly implemented can be accessed through the `request` method exposed on `Site`. This methods uses authentication from the current Site session and shadows `requests.request` from the [requests](https://requests.readthedocs.io/en/latest/api/#requests.request) library, using a [site relative path](https://learn.microsoft.com/en-us/graph/api/resources/sharepoint?view=graph-rest-1.0#sharepoint-api-root-resources).
+SharePoint REST services endpoints not explicitly implemented can be accessed through the `request` method exposed on `Site`. This methods uses authentication from the current Site session and shadows `requests.request` from the [requests package](https://requests.readthedocs.io/en/latest/api/#requests.request), using a [site relative path](https://learn.microsoft.com/en-us/graph/api/resources/sharepoint?view=graph-rest-1.0#sharepoint-api-root-resources) instead of a complete url.
 
 The `get_form_digest` method is provided to obtain the bearer token passed in the `X-RequestDigest` header for update requests.
 
