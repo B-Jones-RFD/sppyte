@@ -114,7 +114,7 @@ with Site(HOST, SITE, USER, PASS) as site:
 
 Model a SharePoint site with authentication and session management.
 
-#### sppyte.Site(host, site, username, password)
+#### `sppyte.Site(host, site, username, password)`
 
 Configure a SharePoint site connection.
 
@@ -154,15 +154,15 @@ with Site(HOST, SITE, USER, PASS) as connection:
 - User should have permissions to the site, library, or list to be accessed. Updates require contribute or higher level access. Unauthorized user will raise a `requests.HTTPError` 401 - Unauthorized exception.
 - For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
-#### Site.connect()
+#### `Site.connect()`
 
 Start a connected session.
 
-#### Site.close()
+#### `Site.close()`
 
 Close connected session.
 
-#### Site.list(name)
+#### `Site.list(name)`
 
 Get a List class instance.
 
@@ -178,7 +178,7 @@ sppyte.List
 pets = connection.list('Pets')
 ```
 
-#### Site.library(name)
+#### `Site.library(name)`
 
 Get a Library class instance.
 
@@ -199,7 +199,7 @@ contracts = connection.library('Contracts')
 
 Model a SharePoint list with authentication and methods to interact with the list items.
 
-#### List(name, site)
+#### `sppyte.List(name, site)`
 
 Create a list connection. Useful alternative when you only need to access a single list.
 
@@ -240,15 +240,15 @@ with List('Pets', site) as pets:
 - User should have permissions to the list to be accessed. Updates require contribute or higher level access. Unauthorized user will raise a `requests.HTTPError` 401 - Unauthorized exception.
 - For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
-#### List.connect()
+#### `List.connect()`
 
 Start a connected session.
 
-#### List.close()
+#### `List.close()`
 
 Close the session.
 
-#### List.add_item(item)
+#### `List.add_item(item)`
 
 Add an item to a SharePoint list. Returns the added item ID.
 
@@ -273,7 +273,7 @@ pet_id = pets.add_item(new_item)
 - Required SharePoint metadata is added automatically.
 
 
-#### List.add_attachment(sp_id, file_name, attachment)
+#### `List.add_attachment(sp_id, file_name, attachment)`
 
 Add an attachment to an existing list item.
 
@@ -294,7 +294,7 @@ with open("notes.txt", "rb") as fh:
     pets.add_attachment(pet_id, "notes.txt", fh)
 ```
 
-#### List.delete_item(sp_id: int)
+#### `List.delete_item(sp_id: int)`
 
 **Parameters**
 - __sp_id__: int - Item to delete
@@ -310,9 +310,9 @@ pet_id = 23
 delete_success = pets.delete_item(pet_id)
 ```
 
-#### List.get_contents(params)
+#### `List.get_contents(params)`
 
-Get contents of a SharePoint list
+Get contents of a SharePoint list.
 
 **Parameters**
 __params__: dict[str, str | int] - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
@@ -329,7 +329,7 @@ pet_items = pets.get_contents({
 })
 ```
 
-#### List.get_item(sp_id)
+#### `List.get_item(sp_id)`
 
 Get SharePoint list item by ID.
 
@@ -345,7 +345,7 @@ pet_id = 23
 pet_item = pets.get(pet_id)
 ```
 
-#### List.update_item(sp_id: int, patch: dict)
+#### `List.update_item(sp_id: int, patch: dict)`
 
 Update an existing list item merging properties from a patch.
 
@@ -369,7 +369,7 @@ pets.update_item(pet_id, patch)
 
 Model a SharePoint library with authentication and methods to interact with the documents.
 
-#### Library(name, site)
+#### `sppyte.Library(name, site)`
 
 Connect to a document library. Useful alternative when you only need to access a single library.
 
@@ -410,15 +410,15 @@ with Library('Contracts', site) as contracts:
 - User should have permissions to the library to be accessed. Updates require contribute or higher level access. Unauthorized user will raise a `requests.HTTPError`  401 - Unauthorized exception.
 - For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
-#### Library.connect()
+#### `Library.connect()`
 
 Start a connected session.
 
-#### Library.close()
+#### `Library.close()`
 
 Close the session.
 
-#### Library.add_folder(folder, \*subfolders)
+#### `Library.add_folder(folder, *subfolders)`
 
 Add a folder to a SharePoint document library.
 
@@ -434,7 +434,7 @@ bool - Add succeeded
 contracts.add_folder('2025', 'January')
 ```
 
-#### Library.add_document(file_name, document, \*subfolders)
+#### `Library.add_document(file_name, document, *subfolders)`
 
 Load a document to a SharePoint document library.
 
@@ -452,7 +452,7 @@ with open("notes.txt", "rb") as file_handler:
     contracts.add_document("notes.txt", file_handler, '2025', 'January')
 ```
 
-#### Library.folder_exists(folder, \*subfolders)
+#### `Library.folder_exists(folder, *subfolders)`
 
 Check if a folder exists in a SharePoint document library.
 
@@ -468,7 +468,7 @@ bool - Folder exists
 contracts.folder_exists('2025', 'January')
 ```
 
-#### Library.delete_document(file_name, \*subfolders)
+#### `Library.delete_document(file_name, *subfolders)`
 
 Delete a document from a SharePoint document library.
 
@@ -484,7 +484,7 @@ bool - Delete succeeded
 contracts.delete_document("notes.txt", '2025', 'January')
 ```
 
-#### Library.delete_folder(folder, \*subfolders)
+#### `Library.delete_folder(folder, *subfolders)`
 
 Delete a folder from a SharePoint document library.
 
@@ -500,7 +500,7 @@ bool - Delete succeeded
 contracts.delete_folder('2025', 'January')
 ```
 
-#### Library.list_contents(params, \*subfolders)
+#### `Library.list_contents(params, *subfolders)`
 
 List contents of a SharePoint document library.
 
@@ -518,7 +518,7 @@ files = contracts.list_contents({
   }, "January", "2025")
 ```
 
-#### Library.get_document(file_name, \*subfolders)
+#### `Library.get_document(file_name, *subfolders)`
 
 Read a document from a SharePoint document library.
 
