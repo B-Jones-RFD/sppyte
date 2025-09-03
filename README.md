@@ -112,7 +112,7 @@ with Site(HOST, SITE, USER, PASS) as site:
 
 ### Site
 
-Model a SharePoint site for authentication and access management.
+Model a SharePoint site with authentication and session management.
 
 #### sppyte.Site(host, site, username, password)
 
@@ -151,8 +151,7 @@ with Site(HOST, SITE, USER, PASS) as connection:
   # Do cool stuff
 ```
 **Notes**
-- User should have permissions to the site, library, or list to be accessed. Updates require contribute or higher level access.
-- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception.
+- User should have permissions to the site, library, or list to be accessed. Updates require contribute or higher level access. Unauthorized user will raise a `requests.HTTPError` 401 - Unauthorized exception.
 - For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
 #### Site.connect()
@@ -198,11 +197,11 @@ contracts = connection.library('Contracts')
 
 ### List
 
-Models a SharePoint site list.
+Model a SharePoint list with authentication and methods to interact with the list items.
 
 #### List(name, site)
 
-Create a list connection. Useful alternative when you only need to interact with a single list.
+Create a list connection. Useful alternative when you only need to access a single list.
 
 **Parameters**
 - __name__ (str): SharePoint list name
@@ -238,8 +237,7 @@ with List('Pets', site) as pets:
 ```
 
 **Notes**
-- User should have permissions to the list to be accessed. Updates require contribute or higher level access.
-- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception.
+- User should have permissions to the list to be accessed. Updates require contribute or higher level access. Unauthorized user will raise a `requests.HTTPError` 401 - Unauthorized exception.
 - For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
 #### List.connect()
@@ -317,7 +315,7 @@ delete_success = pets.delete_item(pet_id)
 Get contents of a SharePoint list
 
 **Parameters**
-__params__: dict[str, str | int] - OData params. See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params.
+__params__: dict[str, str | int] - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
 
 **Returns:**
 list[dict[str, str | int]] - JSON decoded list items
@@ -369,11 +367,11 @@ pets.update_item(pet_id, patch)
 
 ### Library
 
-Models a SharePoint site document library. 
+Model a SharePoint library with authentication and methods to interact with the documents.
 
 #### Library(name, site)
 
-Connect to a document library. Useful alternative when you only need to interact with a single library.
+Connect to a document library. Useful alternative when you only need to access a single library.
 
 **Parameters**
 - __name__ (str): SharePoint library name
@@ -409,8 +407,7 @@ with Library('Contracts', site) as contracts:
 ```
 
 **Notes**
-- User should have permissions to the library to be accessed. Updates require contribute or higher level access.
-- Unauthorized user will return `requests.HTTPError` Unauthorized (401) exception.
+- User should have permissions to the library to be accessed. Updates require contribute or higher level access. Unauthorized user will raise a `requests.HTTPError`  401 - Unauthorized exception.
 - For user managed connections, call the `connect` method to start a session and `close` method to end the session. Using a `with` statement for context management will automatically connect and close sessions.
 
 #### Library.connect()
@@ -508,7 +505,7 @@ contracts.delete_folder('2025', 'January')
 List contents of a SharePoint document library.
 
 **Parameters**
-- __params__: dict[str, str | int] - OData params. See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params.
+- __params__: dict[str, str | int] - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
 - __*subfolders__: str (Optional) - Additional path folder names for nested folders
 
 **Returns:**
@@ -557,7 +554,7 @@ except (ResponseFormatError, SessionError) as e:
 
 ### Extension methods 
 
-SharePoint REST services endpoints not explicitly implemented can be accessed through the `request` method exposed on `Site`. This methods uses authentication from the current Site session and shadows `request` from the requests library, using a **site relative url**.
+SharePoint REST services endpoints not explicitly implemented can be accessed through the `request` method exposed on `Site`. This methods uses authentication from the current Site session and shadows `requests.request` from the [requests](https://requests.readthedocs.io/en/latest/api/#requests.request) library, using a [site relative path](https://learn.microsoft.com/en-us/graph/api/resources/sharepoint?view=graph-rest-1.0#sharepoint-api-root-resources).
 
 The `get_form_digest` method is provided to obtain the bearer token passed in the `X-RequestDigest` header for update requests.
 
