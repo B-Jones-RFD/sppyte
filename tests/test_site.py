@@ -10,7 +10,7 @@ from requests import HTTPError, Session
 
 from sppyte import AuthError, ConfigurationError, SharePointError, Site
 from sppyte.site import _rewinder
-from tests.conftest import BASE, CONTEXTINFO, DIGEST, HOST, SITE_REL, add_contextinfo
+from tests.conftest import ANY_URL, BASE, CONTEXTINFO, DIGEST, HOST, SITE_REL, add_contextinfo
 
 WEB = f"{BASE}/_api/web"
 
@@ -361,3 +361,37 @@ def test_rewinder_seekable_restores_position():
 
 def test_rewinder_rejects_generator():
     assert _rewinder(iter([b"a"])) is None
+
+
+# ------------------------------------------------------------ get_page ----
+def test_get_page_fetches_link_on_same_host(site, mocked):
+    link = f"{BASE}/_api/web/lists/GetByTitle('Pets')/items?%24skiptoken=Paged%3DTRUE%26p_ID%3D100"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Id": 101}]})
+    page = site.get_page(link)
+    assert page == [{"Id": 101}]
+    assert page.next_link is None
+    req = mocked.calls[-1].request
+    assert req.url == link
+    assert req.headers["Accept"] == "application/json;odata=nometadata"
+    assert req.req_kwargs["timeout"] == site.timeout
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://evil.example.com/sites/parrots/_api/web/lists",
+        "http://sp.example.com/sites/parrots/_api/web/lists",  # scheme differs
+        "https://sp.example.com:8443/_api/web/lists",  # port differs
+        "/sites/parrots/_api/web/lists",  # relative
+    ],
+)
+def test_get_page_rejects_other_origins(site, mocked, link):
+    with pytest.raises(ConfigurationError, match="next_link must be on"):
+        site.get_page(link)
+    assert len(mocked.calls) == 1  # contextinfo only; nothing was sent
+
+
+def test_get_page_host_match_is_case_insensitive(site, mocked):
+    mocked.add(responses.GET, ANY_URL, json={"value": []})
+    site.get_page("HTTPS://SP.EXAMPLE.COM/sites/parrots/_api/web/lists")
+    assert len(mocked.calls) == 2

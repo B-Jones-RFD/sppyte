@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import IO, TYPE_CHECKING, Any
 
-from sppyte.odata import Params, odata_literal
-from sppyte.utils import parse_created_item, parse_item_type
+from sppyte.odata import Page, Params, follow_pages, odata_literal, parse_page
+from sppyte.utils import parse_created_item, parse_item_type, parse_object
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
 
     from sppyte.site import Site
 
@@ -71,12 +71,14 @@ class List:
         return payload
 
     # --------------------------------------------------------------- reads ----
-    def get_contents(self, params: Params = None) -> list[dict[str, Any]]:
+    def get_contents(self, params: Params = None) -> Page:
         """
-        Return list items; pass OData params like ``$select``, ``$filter``,
-        ``$top``, etc. Example: ``get_contents({"$select": "Id,Title", "$top": 5})``
+        Return one page of list items; pass OData params like ``$select``,
+        ``$filter``, ``$top``, etc. Example: ``get_contents({"$select": "Id,Title", "$top": 5})``
 
-        SharePoint returns at most 100 items unless ``$top`` is given.
+        SharePoint returns at most 100 items unless ``$top`` is given. The
+        result is a `Page` (a ``list``); its ``next_link`` is set when more
+        items remain. Use `iter_items` / `get_all_items` to follow it.
         """
         r = self.site.request(
             "get",
@@ -84,7 +86,24 @@ class List:
             headers={"Accept": JSON_NOMETADATA},
             params=params,
         )
-        return r.json().get("value", [])
+        return parse_page(r.json())
+
+    def iter_pages(self, params: Params = None, *, max_pages: int | None = None) -> Iterator[Page]:
+        """Yield each page of items, following ``next_link`` until exhausted or `max_pages`."""
+        return follow_pages(self.get_contents(params), self.site.get_page, max_pages)
+
+    def iter_items(self, params: Params = None, *, max_pages: int | None = None) -> Iterator[dict[str, Any]]:
+        """
+        Yield every item across all pages, one request per page.
+
+        Example: ``for task in tasks.iter_items({"$select": "Id,Title", "$top": 500}): ...``
+        """
+        for page in self.iter_pages(params, max_pages=max_pages):
+            yield from page
+
+    def get_all_items(self, params: Params = None, *, max_pages: int | None = None) -> list[dict[str, Any]]:
+        """Collect every item across all pages into one list."""
+        return list(self.iter_items(params, max_pages=max_pages))
 
     def get_item(self, sp_id: int) -> dict[str, Any]:
         """Fetch a single list item by SharePoint ID."""
@@ -158,18 +177,19 @@ class List:
         attachment: IO[bytes] | bytes,
         *,
         digest: str | None = None,
-    ) -> int:
+    ) -> dict[str, Any]:
         """
         Add a file attachment to an existing list item.
 
         `attachment` can be bytes or a file-like object opened in binary mode.
-        Returns `sp_id`.
+        Returns the ``SP.Attachment`` object SharePoint created
+        (``FileName``, ``ServerRelativeUrl``).
         """
-        self.site.request(
+        r = self.site.request(
             "post",
             f"{self._base_path}/items('{sp_id}')/AttachmentFiles/add(FileName='{odata_literal(file_name)}')",
             headers={"Accept": JSON_NOMETADATA, "Content-Type": "application/octet-stream"},
             data=attachment,
             digest=digest or True,
         )
-        return sp_id
+        return parse_object(r.json())

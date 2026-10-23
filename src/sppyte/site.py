@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from requests import Response, Session
 from requests_ntlm import HttpNtlmAuth
@@ -19,6 +20,7 @@ from requests_ntlm import HttpNtlmAuth
 from sppyte.errors import FORBIDDEN, AuthError, ConfigurationError, raise_for_status
 from sppyte.libraries import Library
 from sppyte.lists import List
+from sppyte.odata import Page, parse_page
 from sppyte.utils import parse_context_info
 
 if TYPE_CHECKING:
@@ -246,6 +248,23 @@ class Site:
             self.invalidate_digest()
             headers["X-RequestDigest"] = self.digest()
             return self._send(method, url, headers=headers, **kwargs)
+
+    def get_page(self, next_link: str, **kwargs: Any) -> Page:
+        """
+        Fetch the page a previous `Page.next_link` points at.
+
+        The link must be on this site's host; anything else raises
+        `ConfigurationError` so credentials are never sent elsewhere.
+        """
+        wanted = urlsplit(self.host)
+        got = urlsplit(next_link)
+        if (got.scheme.lower(), got.netloc.lower()) != (wanted.scheme.lower(), wanted.netloc.lower()):
+            msg = f"next_link must be on {self.host} (got {next_link!r})"
+            raise ConfigurationError(msg)
+        kwargs.setdefault("timeout", self.timeout)
+        headers = {"Accept": "application/json;odata=nometadata", **(kwargs.pop("headers", None) or {})}
+        r = self._send("get", next_link, headers=headers, **kwargs)
+        return parse_page(r.json())
 
     # ----------------------------------------------------------- helpers ----
     def list(self, name: str) -> List:

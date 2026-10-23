@@ -18,6 +18,8 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
 - [Usage](#usage)
   - [Connecting](#connecting)
   - [Write operations and the request digest](#write-operations-and-the-request-digest)
+  - [Paging](#paging)
+  - [Large files](#large-files)
   - [Errors](#errors)
   - [Timeouts, TLS and proxies](#timeouts-tls-and-proxies)
   - [Special characters](#special-characters)
@@ -35,12 +37,13 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
 - `Site` connection with NTLM auth, lazy session creation and a **managed form digest** (fetched, cached, refreshed before expiry, and retried once if SharePoint rejects it).
 - `List` helper to:
   - Add / update / delete items
+  - Iterate every item across pages (`iter_items`, `get_all_items`)
   - Use [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params to control item responses
   - Add **attachments** to items
 - `Library` helper to:
   - Add / delete **folders**
-  - Upload / download / delete **documents**
-  - List folder contents and control output with [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params
+  - Upload / download / delete **documents**, streaming large files in both directions
+  - List files and folders, page through them, and control output with [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params
 - Exceptions that carry SharePoint's own error message, status code and `Retry-After`.
 - Access other [SharePoint REST service](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/get-to-know-the-sharepoint-rest-service) endpoints as needed.
 - Fully typed (`py.typed`).
@@ -66,8 +69,7 @@ with Site(HOST, SITE, USER, PASS, domain="CONTOSO") as site:
     pets = site.list("Pets")
 
     # Add an item (entity type metadata is added for you)
-    created = pets.add_item({"Title": "Norwegian Blue"})
-    new_id = created["Id"]
+    new_id = pets.add_item({"Title": "Norwegian Blue"})["Id"]
 
     # Update the item (uses MERGE)
     pets.update_item(new_id, {"Title": "Polly"})
@@ -79,12 +81,16 @@ with Site(HOST, SITE, USER, PASS, domain="CONTOSO") as site:
     # Fetch one item
     item = pets.get_item(new_id)
 
-    # Query contents (use any OData params you need)
+    # Query one page of items (use any OData params you need)
     items = pets.get_contents({
         "$select": "Id,Title,Created",
         "$top": 5,
         "$orderby": "Created desc",
     })
+
+    # Or walk every item, page by page
+    for item in pets.iter_items({"$select": "Id,Title", "$top": 500}):
+        ...
 
     # Delete the item
     pets.delete_item(new_id)
@@ -95,16 +101,18 @@ with Site(HOST, SITE, USER, PASS, domain="CONTOSO") as site:
     # Ensure a nested folder path exists
     shared_docs.add_folder("Napping", "2025")
 
-    # Upload a document
-    with open("report.pdf", "rb") as file_handle:
-        unique_id = shared_docs.add_document("report.pdf", file_handle, "Napping", "2025")
+    # Upload a document from a path (streamed), bytes, or an open file
+    uploaded = shared_docs.add_document("report.pdf", "local/report.pdf", "Napping", "2025")
+    print(uploaded["ServerRelativeUrl"], uploaded["UniqueId"])
 
     # List files in the library root, and in a subfolder
     files = shared_docs.list_contents(params={"$select": "Name,TimeCreated"})
     folder_files = shared_docs.list_contents("Napping", "2025", params={"$select": "Name"})
+    subfolders = shared_docs.list_folders("Napping")
 
-    # Download a document (bytes)
+    # Download a document (bytes), or stream it to disk
     report = shared_docs.get_document("report.pdf", "Napping", "2025")
+    shared_docs.download("report.pdf", "local/report-copy.pdf", "Napping", "2025")
 
     # Delete a document
     shared_docs.delete_document("report.pdf", "Napping", "2025")
@@ -152,6 +160,41 @@ pets.add_item({"Title": "x"}, digest=digest)
 ```
 
 `site.digest()` returns the cached digest (refreshing if needed) and `site.invalidate_digest()` drops it.
+
+### Paging
+
+SharePoint caps a collection response (100 list items by default, or `$top`) and points at the rest with `odata.nextLink`. `get_contents`, `list_contents` and `list_folders` return a `Page` — a plain `list` with a `next_link` attribute, so existing code that iterates or indexes the result is unchanged:
+
+```py
+page = tasks.get_contents({"$top": 500})
+while page.next_link:
+    page = site.get_page(page.next_link)
+```
+
+Usually you want the helpers that do this for you:
+
+| | one page | every page, lazily | every page, collected |
+|---|---|---|---|
+| `List` | `get_contents(params)` | `iter_items(params)` / `iter_pages(params)` | `get_all_items(params)` |
+| `Library` | `list_contents(*folders, params=)` | `iter_files(...)` / `iter_pages(...)` | `get_all_files(...)` |
+
+All accept `max_pages=` to stop early. `iter_*` issue one request per page as you consume them. `Site.get_page(next_link)` refuses a link that is not on the site's host, so credentials are never sent elsewhere.
+
+> `$filter` on a non-indexed column fails on lists above the 5,000-item view threshold regardless of paging; that needs a CAML query (planned for a later release).
+
+### Large files
+
+Uploads stream: pass a path (opened for you), an open binary file object, or `bytes`. If the managed digest has to be refreshed mid-upload, a path or seekable file is re-sent from the start; a non-seekable stream cannot be and the `AuthError` propagates.
+
+Downloads: `get_document` returns `bytes`; for anything big use `iter_document` (a generator of chunks) or `download(file_name, dest, *folders)`, which writes to a path or an open binary file object and returns the byte count. HTTP errors are raised before the first chunk.
+
+```py
+docs.download("backup.iso", "/mnt/backups/backup.iso", "ISOs", chunk_size=1 << 20)
+
+with open("out.bin", "wb") as fh:
+    for chunk in docs.iter_document("big.bin", "Exports"):
+        fh.write(chunk)
+```
 
 ### Errors
 
@@ -241,6 +284,7 @@ See [Connecting](#connecting) and [Timeouts, TLS and proxies](#timeouts-tls-and-
 | `digest(*, refresh=False)` | The managed form digest, fetching/refreshing as needed. |
 | `get_form_digest()` | Always fetch a fresh digest (and cache it). |
 | `invalidate_digest()` | Drop the cached digest. |
+| `get_page(next_link)` | Fetch the page a `Page.next_link` points at (same host only). |
 | `form_digest` | The cached digest, or `None`. |
 | `session` | The `requests.Session`, or `None` before first use. |
 | `site_path`, `host`, `relative_url`, `principal` | Normalised connection details (`principal` is `DOMAIN\user`). |
@@ -251,12 +295,15 @@ Obtain with `site.list(name)` (or `List(name, site)`). `name` is the list **titl
 
 | member | returns | |
 |---|---|---|
-| `get_contents(params=None)` | `list[dict]` | Items; at most 100 unless `$top` is given. |
+| `get_contents(params=None)` | `Page` | One page of items (a `list` with `next_link`); at most 100 unless `$top` is given. |
+| `iter_pages(params=None, *, max_pages=None)` | `Iterator[Page]` | Follow `next_link` page by page. |
+| `iter_items(params=None, *, max_pages=None)` | `Iterator[dict]` | Every item across pages, lazily. |
+| `get_all_items(params=None, *, max_pages=None)` | `list[dict]` | Every item across pages. |
 | `get_item(sp_id)` | `dict` | One item by ID. |
 | `add_item(item, *, digest=None)` | `dict` | The created item as SharePoint returned it, including `Id`. `__metadata.type` is added unless present; `item` is not modified. |
 | `update_item(sp_id, patch, *, digest=None)` | `int` | MERGE-update; omitted fields are untouched. Returns `sp_id`. |
 | `delete_item(sp_id, *, digest=None)` | `bool` | `True`; failures raise. |
-| `add_attachment(sp_id, file_name, attachment, *, digest=None)` | `int` | `attachment` is `bytes` or a binary file object. Returns `sp_id`. |
+| `add_attachment(sp_id, file_name, attachment, *, digest=None)` | `dict` | The `SP.Attachment` created (`FileName`, `ServerRelativeUrl`). `attachment` is `bytes` or a binary file object. |
 | `item_type` | `str` | `ListItemEntityTypeFullName`, fetched once and cached. |
 | `get_item_type()` | `str` | Fetch it again and refresh the cache. |
 
@@ -268,11 +315,17 @@ Obtain with `site.library(name)` (or `Library(name, site)`). Folder arguments ar
 
 | member | returns | |
 |---|---|---|
-| `list_contents(*subfolders, params=None)` | `list[dict]` | Files directly in the folder (`SP.File` objects: `Name`, `ServerRelativeUrl`, `Length`, …). |
+| `list_contents(*subfolders, params=None)` | `Page` | Files directly in the folder (`SP.File`: `Name`, `ServerRelativeUrl`, `Length`, …). |
+| `list_folders(*subfolders, params=None)` | `Page` | Folders directly in the folder (`SP.Folder`: `Name`, `ServerRelativeUrl`, `ItemCount`, …). |
+| `iter_pages(*subfolders, params=None, max_pages=None)` | `Iterator[Page]` | Follow `next_link` for files, page by page. |
+| `iter_files(*subfolders, params=None, max_pages=None)` | `Iterator[dict]` | Every file across pages, lazily. |
+| `get_all_files(*subfolders, params=None, max_pages=None)` | `list[dict]` | Every file across pages. |
 | `get_document(file_name, *subfolders)` | `bytes` | Download into memory. |
+| `iter_document(file_name, *subfolders, chunk_size=65536)` | `Iterator[bytes]` | Stream the file as chunks. |
+| `download(file_name, dest, *subfolders, chunk_size=65536)` | `int` | Stream to a path or binary file object; returns bytes written. |
 | `folder_exists(folder, *subfolders)` | `bool` | Missing folder is `False`, not an error. |
-| `add_folder(folder, *subfolders, digest=None)` | `bool` | Create a folder (parent must exist). |
-| `add_document(file_name, document, *subfolders, digest=None)` | `str` | Upload (overwrites); returns `UniqueId`. `document` is `bytes` or a binary file object (streamed). |
+| `add_folder(folder, *subfolders, digest=None)` | `dict` | Create a folder (parent must exist); returns the `SP.Folder`. Already existing is not an error. |
+| `add_document(file_name, document, *subfolders, overwrite=True, digest=None)` | `dict` | Upload; returns the `SP.File` (`UniqueId`, `ServerRelativeUrl`, …). `document` is a path, a binary file object, or `bytes`. `overwrite=False` makes a clash a `SharePointError`. |
 | `delete_document(file_name, *subfolders, digest=None)` | `bool` | |
 | `delete_folder(folder, *subfolders, digest=None)` | `bool` | |
 | `server_relative_url(*parts)` | `str` | e.g. `/sites/parrots/Shared Documents/Reports`. |
@@ -280,6 +333,8 @@ Obtain with `site.library(name)` (or `Library(name, site)`). Folder arguments ar
 ## Migrating to 1.0
 
 - **`List.add_item` returns the created item (`dict`) instead of the ID.** Replace `new_id = pets.add_item(...)` with `new_id = pets.add_item(...)["Id"]`.
+- **`Library.add_folder`, `add_document` and `List.add_attachment` return SharePoint's object (`dict`)** instead of `Exists`, `UniqueId` and `sp_id` respectively: use `["Exists"]`, `["UniqueId"]`, `["ServerRelativeUrl"]`.
+- **`get_contents` / `list_contents` return a `Page`**, a `list` subclass — no change needed unless you compared `type(...) is list`.
 - **`Library.list_contents(params, *subfolders)` → `list_contents(*subfolders, params=None)`.** `params` is keyword-only: `docs.list_contents("A", "B", params={...})`.
 - **`List` and `Library` no longer own the session.** `with site.list("X") as l:` and `List.connect()` / `close()` are gone — they closed the *shared* `Site` session. Use `with Site(...) as site:` (or `site.connect()` / `site.close()`).
 - **HTTP errors are `SharePointError` / `AuthError`.** Both still subclass `requests.HTTPError`, so `except HTTPError` keeps working; `e.response` is still available.

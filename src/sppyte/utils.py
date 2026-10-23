@@ -30,6 +30,7 @@ __all__ = [
     "parse_created_item",
     "parse_form_digest",
     "parse_item_type",
+    "parse_object",
 ]
 
 DEFAULT_DIGEST_TIMEOUT = 1800
@@ -145,3 +146,16 @@ def parse_add_document(r: AddDocumentResponse) -> str:
     if item_type == val:
         raise ResponseFormatError(val)
     return item_type
+
+
+def parse_object(r: Any) -> dict[str, Any]:
+    """
+    Return a single SharePoint object from a response. Accepts both the
+    ``nometadata`` shape (flat object) and the ``verbose`` shape (``{"d": {...}}``).
+    Raises ResponseFormatError if the body is not an object.
+    """
+    item = r.get("d", r) if isinstance(r, dict) else None
+    if not isinstance(item, dict):
+        msg = "Object response"
+        raise ResponseFormatError(msg)
+    return item

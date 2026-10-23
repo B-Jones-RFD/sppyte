@@ -34,6 +34,17 @@ path = "src/sppyte/__about__.py"
 [tool.hatch.envs.hatch-test]
 extra-dependencies = ["responses>=0.25"]
 
+[tool.hatch.envs.hatch-static-analysis]
+# Hatch writes its default ruff rules to this file (`hatch fmt --sync`); committing it
+# keeps local `hatch fmt` and CI on the same rule set regardless of hatch/ruff version.
+config-path = "ruff_defaults.toml"
+# Must match the ruff the defaults were generated for. To upgrade: bump hatch,
+# run `hatch fmt --sync`, then update this pin to `hatch run hatch-static-analysis:ruff --version`.
+dependencies = ["ruff==0.4.5"]
+
+[tool.ruff]
+extend = "ruff_defaults.toml"
+
 [tool.hatch.envs.types]
 extra-dependencies = ["mypy>=1.0.0"]
 [tool.hatch.envs.types.scripts]

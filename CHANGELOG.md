@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0a2] - 2026-10-23
+
+### Changed (breaking)
+
+- `Library.add_folder` returns the `SP.Folder` object (`dict`) instead of the `Exists` bool.
+- `Library.add_document` returns the `SP.File` object (`dict`) instead of the `UniqueId` string.
+- `List.add_attachment` returns the `SP.Attachment` object (`dict`) instead of echoing `sp_id`.
+- `List.get_contents` and `Library.list_contents` return a `Page` (a `list` subclass with `next_link`).
+- `Library.get_document` sends `Accept: application/octet-stream`.
+
+### Added
+
+- Paging: `Page`, `Site.get_page(next_link)` (same-host only), `List.iter_pages` / `iter_items` / `get_all_items`,
+  `Library.iter_pages` / `iter_files` / `get_all_files`, all with `max_pages=`.
+- `Library.list_folders(*subfolders, params=None)`.
+- Streaming downloads: `Library.iter_document(...)` and `Library.download(file_name, dest, *subfolders)`.
+- `Library.add_document` accepts a path (`str` / `os.PathLike`) and streams it; new `overwrite=` keyword.
+- `sppyte.odata.parse_page` / `follow_pages`; `sppyte.utils.parse_object`.
+- `ruff` is pinned for `hatch fmt` so local and CI lint agree.
+
+
 ## [1.0.0a1] - 2026-10-23
 
 ### Changed (breaking)
@@ -72,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...HEAD
+[1.0.0a2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...v1.0.0a2
 [1.0.0a1]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...v1.0.0a1
 [0.2.0]: https://github.com/B-Jones-RFD/sppyte/compare/v0.1.7...v0.2.0

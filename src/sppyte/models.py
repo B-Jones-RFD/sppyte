@@ -8,7 +8,7 @@ Compatibility shim: `Site`, `List` and `Library` now live in `sppyte.site`,
 
 from sppyte.libraries import Library
 from sppyte.lists import List
-from sppyte.odata import Params, ParamValue
+from sppyte.odata import Page, Params, ParamValue
 from sppyte.site import Site
 
-__all__ = ["Library", "List", "ParamValue", "Params", "Site"]
+__all__ = ["Library", "List", "Page", "ParamValue", "Params", "Site"]

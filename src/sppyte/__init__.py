@@ -21,7 +21,7 @@ from sppyte.errors import (
 )
 from sppyte.libraries import Library
 from sppyte.lists import List
-from sppyte.odata import Params
+from sppyte.odata import Page, Params
 from sppyte.site import Site
 
 __all__ = [
@@ -29,6 +29,7 @@ __all__ = [
     "ConfigurationError",
     "Library",
     "List",
+    "Page",
     "Params",
     "ResponseFormatError",
     "SessionError",

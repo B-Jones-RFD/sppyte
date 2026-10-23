@@ -1,5 +1,7 @@
 import pytest
 
+from sppyte.errors import ResponseFormatError
+from sppyte.odata import Page, follow_pages, parse_page
 from sppyte.utils import (
     build_path,
     odata_literal,
@@ -10,6 +12,7 @@ from sppyte.utils import (
     parse_created_item,
     parse_form_digest,
     parse_item_type,
+    parse_object,
 )
 
 
@@ -188,3 +191,68 @@ def test_parse_created_item_verbose():
 def test_parse_created_item_invalid_raises(r):
     with pytest.raises(Exception, match=r"Created item|Item id"):
         parse_created_item(r)
+
+
+# ------------------------- parse_object ----------------------------------
+def test_parse_object_shapes():
+    assert parse_object({"Name": "x"}) == {"Name": "x"}
+    assert parse_object({"d": {"Name": "x"}}) == {"Name": "x"}
+
+
+@pytest.mark.parametrize("r", [[], None, "s", {"d": []}])
+def test_parse_object_invalid_raises(r):
+    with pytest.raises(ResponseFormatError):
+        parse_object(r)
+
+
+# ------------------------- Page / parse_page / follow_pages ---------------
+def test_page_is_a_list_with_next_link():
+    page = Page([{"Id": 1}], "https://x/next")
+    assert page == [{"Id": 1}]
+    assert isinstance(page, list)
+    assert page.next_link == "https://x/next"
+    assert "next_link=" in repr(page)
+    assert repr(Page()) == "Page([])"
+    assert Page().next_link is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "items", "link"),
+    [
+        ({"value": [1, 2]}, [1, 2], None),
+        ({"value": [], "odata.nextLink": "https://x/n"}, [], "https://x/n"),
+        ({"value": [1], "@odata.nextLink": "https://x/n"}, [1], "https://x/n"),
+        ({"value": [1], "odata.nextLink": ""}, [1], None),
+        ({}, [], None),
+    ],
+)
+def test_parse_page(payload, items, link):
+    page = parse_page(payload)
+    assert page == items
+    assert page.next_link == link
+
+
+INVALID_PAGES: list[object] = [[], None, {"value": "nope"}, {"value": {}}]
+
+
+@pytest.mark.parametrize("payload", INVALID_PAGES)
+def test_parse_page_invalid_raises(payload):
+    with pytest.raises(ResponseFormatError):
+        parse_page(payload)
+
+
+def test_follow_pages():
+    pages = {"L2": Page([2], "L3"), "L3": Page([3])}
+    fetched = []
+
+    def fetch(link):
+        fetched.append(link)
+        return pages[link]
+
+    assert [list(p) for p in follow_pages(Page([1], "L2"), fetch)] == [[1], [2], [3]]
+    assert fetched == ["L2", "L3"]
+
+
+def test_follow_pages_max_pages_and_single_page():
+    assert len(list(follow_pages(Page([1], "L2"), lambda _: Page([2], "L3"), max_pages=2))) == 2
+    assert len(list(follow_pages(Page([1]), lambda _: Page([2])))) == 1

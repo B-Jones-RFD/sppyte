@@ -12,7 +12,7 @@ import io
 import pytest
 import responses
 
-from sppyte import Library, List, ResponseFormatError, Site
+from sppyte import Library, List, Page, ResponseFormatError, SharePointError, Site
 from tests.conftest import ANY_URL, BASE, DIGEST, HOST, SITE_REL, json_body
 
 # ------------------------------- List ----------------------------------------
@@ -165,12 +165,63 @@ def test_get_contents_accepts_sequence_of_pairs(pets, mocked):
 
 def test_get_contents_empty_when_value_missing(pets, mocked):
     mocked.add(responses.GET, ANY_URL, json={})
-    assert pets.get_contents() == []
+    page = pets.get_contents()
+    assert page == []
+    assert isinstance(page, Page)
+    assert page.next_link is None
+
+
+def test_get_contents_exposes_next_link(pets, mocked):
+    link = f"{LIST_URL}/items?%24skiptoken=Paged%3DTRUE%26p_ID%3D100&%24top=100"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Id": 1}], "odata.nextLink": link})
+    page = pets.get_contents()
+    assert page == [{"Id": 1}]
+    assert page.next_link == link
+
+
+def _three_pages(mocked, base):
+    l2 = f"{base}?%24skiptoken=Paged%3DTRUE%26p_ID%3D2"
+    l3 = f"{base}?%24skiptoken=Paged%3DTRUE%26p_ID%3D4"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Id": 1}, {"Id": 2}], "odata.nextLink": l2})
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Id": 3}, {"Id": 4}], "odata.nextLink": l3})
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Id": 5}]})
+    return l2, l3
+
+
+def test_iter_items_follows_next_link(pets, mocked):
+    l2, l3 = _three_pages(mocked, f"{LIST_URL}/items")
+    ids = [item["Id"] for item in pets.iter_items({"$top": 2})]
+    assert ids == [1, 2, 3, 4, 5]
+    urls = [c.request.url for c in mocked.calls[1:]]
+    assert urls == [f"{LIST_URL}/items?%24top=2", l2, l3]
+    assert all(c.request.headers["Accept"] == "application/json;odata=nometadata" for c in mocked.calls[1:])
+
+
+def test_get_all_items(pets, mocked):
+    _three_pages(mocked, f"{LIST_URL}/items")
+    assert [i["Id"] for i in pets.get_all_items()] == [1, 2, 3, 4, 5]
+
+
+def test_iter_pages_max_pages(pets, mocked):
+    _three_pages(mocked, f"{LIST_URL}/items")
+    pages = list(pets.iter_pages(max_pages=2))
+    assert len(pages) == 2
+    assert pages[1].next_link is not None
+    assert len(mocked.calls) == 3  # contextinfo + 2 pages
+
+
+def test_iter_items_is_lazy(pets, mocked):
+    _three_pages(mocked, f"{LIST_URL}/items")
+    it = pets.iter_items()
+    assert len(mocked.calls) == 1  # nothing fetched until iteration starts
+    assert next(it)["Id"] == 1
+    assert len(mocked.calls) == 2
 
 
 def test_add_attachment_bytes(pets, mocked):
-    mocked.add(responses.POST, ANY_URL, json={})
-    assert pets.add_attachment(4, "notes.txt", b"hello") == 4
+    att = {"FileName": "notes.txt", "ServerRelativeUrl": "/sites/parrots/Lists/Pets/Attachments/4/notes.txt"}
+    mocked.add(responses.POST, ANY_URL, json=att)
+    assert pets.add_attachment(4, "notes.txt", b"hello") == att
     req = mocked.calls[-1].request
     assert req.url == f"{LIST_URL}/items('4')/AttachmentFiles/add(FileName='notes.txt')"
     assert req.body == b"hello"
@@ -179,7 +230,7 @@ def test_add_attachment_bytes(pets, mocked):
 
 
 def test_add_attachment_file_like(pets, mocked):
-    mocked.add(responses.POST, ANY_URL, json={})
+    mocked.add(responses.POST, ANY_URL, json={"FileName": "a b.txt"})
     fh = io.BytesIO(b"stream")
     pets.add_attachment(4, "a b.txt", fh)
     req = mocked.calls[-1].request
@@ -218,8 +269,9 @@ def test_server_relative_url(docs):
 
 
 def test_add_folder_uses_site_relative_url(docs, mocked):
-    mocked.add(responses.POST, ANY_URL, json={"Exists": True})
-    assert docs.add_folder("Reports", "2025") is True
+    folder = {"Exists": True, "Name": "2025", "ServerRelativeUrl": "/sites/parrots/Shared Documents/Reports/2025"}
+    mocked.add(responses.POST, ANY_URL, json=folder)
+    assert docs.add_folder("Reports", "2025") == folder
     req = mocked.calls[-1].request
     assert req.url == f"{BASE}/_api/web/folders"
     assert req.headers["X-RequestDigest"] == DIGEST
@@ -227,9 +279,10 @@ def test_add_folder_uses_site_relative_url(docs, mocked):
 
 
 def test_add_document_streams_file(docs, mocked):
-    mocked.add(responses.POST, ANY_URL, json={"UniqueId": "abc-123"})
+    created = {"UniqueId": "abc-123", "Name": "report.pdf", "Length": "8"}
+    mocked.add(responses.POST, ANY_URL, json=created)
     fh = io.BytesIO(b"%PDF-1.4")
-    assert docs.add_document("report.pdf", fh, "Reports", "2025") == "abc-123"
+    assert docs.add_document("report.pdf", fh, "Reports", "2025") == created
     req = mocked.calls[-1].request
     assert req.url == f"{folder_url('Reports', '2025')}/Files/add(url='report.pdf',overwrite=true)"
     assert req.headers["Content-Type"] == "application/octet-stream"
@@ -242,10 +295,29 @@ def test_add_document_to_library_root(docs, mocked):
     assert mocked.calls[-1].request.url == f"{folder_url()}/Files/add(url='a.txt',overwrite=true)"
 
 
-def test_add_document_missing_unique_id_raises(docs, mocked):
-    mocked.add(responses.POST, ANY_URL, json={})
+def test_add_document_non_object_response_raises(docs, mocked):
+    mocked.add(responses.POST, ANY_URL, json=[])
     with pytest.raises(ResponseFormatError):
         docs.add_document("a.txt", b"x")
+
+
+def test_add_document_overwrite_false(docs, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"Name": "a.txt"})
+    docs.add_document("a.txt", b"x", overwrite=False)
+    assert mocked.calls[-1].request.url.endswith("/Files/add(url='a.txt',overwrite=false)")
+
+
+def test_add_document_from_path(docs, mocked, tmp_path):
+    src = tmp_path / "local.bin"
+    src.write_bytes(b"\x00\x01\x02")
+    mocked.add(responses.POST, ANY_URL, json={"Name": "remote.bin"})
+    assert docs.add_document("remote.bin", src, "Reports")["Name"] == "remote.bin"
+    req = mocked.calls[-1].request
+    assert req.url == f"{folder_url('Reports')}/Files/add(url='remote.bin',overwrite=true)"
+    assert req.headers["Content-Type"] == "application/octet-stream"
+    # a str path works too
+    mocked.add(responses.POST, ANY_URL, json={"Name": "remote.bin"})
+    docs.add_document("remote.bin", str(src))
 
 
 def test_folder_exists(docs, mocked):
@@ -283,7 +355,29 @@ def test_list_contents_params_is_keyword_only(docs, mocked):
     mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "a.txt"}]})
     files = docs.list_contents("Reports", params={"$select": "Name"})
     assert files == [{"Name": "a.txt"}]
+    assert isinstance(files, Page)
+    assert files.next_link is None
     assert mocked.calls[-1].request.url == f"{folder_url('Reports')}/Files?%24select=Name"
+
+
+def test_list_folders(docs, mocked):
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "2025"}]})
+    assert docs.list_folders("Reports", params={"$top": 10}) == [{"Name": "2025"}]
+    assert mocked.calls[-1].request.url == f"{folder_url('Reports')}/Folders?%24top=10"
+
+
+def test_list_contents_exposes_next_link(docs, mocked):
+    next_link = f"{folder_url('Reports')}/Files?%24skiptoken=Paged%3DTRUE%26p_ID%3D100"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "a"}], "odata.nextLink": next_link})
+    assert docs.list_contents("Reports").next_link == next_link
+
+
+def test_library_paging(docs, mocked):
+    next_link = f"{folder_url('Reports')}/Files?%24skiptoken=Paged%3DTRUE%26p_ID%3D100"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "a"}], "odata.nextLink": next_link})
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "b"}]})
+    assert docs.get_all_files("Reports") == [{"Name": "a"}, {"Name": "b"}]
+    assert mocked.calls[-1].request.url == next_link
 
 
 def test_list_contents_root_no_params(docs, mocked):
@@ -295,7 +389,40 @@ def test_list_contents_root_no_params(docs, mocked):
 def test_get_document(docs, mocked):
     mocked.add(responses.GET, ANY_URL, body=b"binary\x00data")
     assert docs.get_document("report.pdf", "Reports") == b"binary\x00data"
-    assert mocked.calls[-1].request.url == f"{folder_url('Reports')}/Files('report.pdf')/$value"
+    req = mocked.calls[-1].request
+    assert req.url == f"{folder_url('Reports')}/Files('report.pdf')/$value"
+    assert req.headers["Accept"] == "application/octet-stream"
+
+
+def test_iter_document_streams_chunks(docs, mocked):
+    mocked.add(responses.GET, ANY_URL, body=b"0123456789")
+    chunks = list(docs.iter_document("big.bin", "Reports", chunk_size=4))
+    assert b"".join(chunks) == b"0123456789"
+    assert len(chunks) >= 2
+    assert mocked.calls[-1].request.url == f"{folder_url('Reports')}/Files('big.bin')/$value"
+
+
+def test_iter_document_raises_before_first_chunk(docs, mocked):
+    mocked.add(responses.GET, ANY_URL, status=404, json={"odata.error": {"message": {"value": "File Not Found."}}})
+    with pytest.raises(SharePointError, match="File Not Found"):
+        next(iter(docs.iter_document("missing.bin")))
+
+
+def test_download_to_path(docs, mocked, tmp_path):
+    mocked.add(responses.GET, ANY_URL, body=b"abcdefgh")
+    dest = tmp_path / "out" / "file.bin"
+    dest.parent.mkdir()
+    assert docs.download("file.bin", dest, "Reports", chunk_size=3) == 8
+    assert dest.read_bytes() == b"abcdefgh"
+
+
+def test_download_to_file_object(docs, mocked):
+    mocked.add(responses.GET, ANY_URL, body=b"abc")
+    buf = io.BytesIO(b"prefix-")
+    buf.seek(0, io.SEEK_END)
+    assert docs.download("file.bin", buf) == 3
+    assert buf.getvalue() == b"prefix-abc"
+    assert not buf.closed
 
 
 def test_library_paths_are_escaped(site, mocked):
