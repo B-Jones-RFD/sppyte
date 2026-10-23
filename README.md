@@ -6,7 +6,7 @@
 
 # Sppyte
 
-A tiny, explicit Python helper for working with SharePoint site in Python using legacy **SharePoint REST** endpoints using and **NTLM** authentication. Sppyte[^1] keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
+A tiny, explicit Python helper for working with SharePoint site in Python using legacy **SharePoint REST** endpoints using **NTLM** authentication. Sppyte[^1] keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
 
 > ⚠️ This client uses **NTLM** (`requests-ntlm`) and is best suited for **SharePoint on-prem** or environments where NTLM is configured. SharePoint Online typically uses different auth flows.
 
@@ -45,7 +45,7 @@ from sppyte import Site
 
 HOST = "https://sharepoint.example.com"
 SITE = "/sites/parrots" # relative path
-USER = "norweigian"
+USER = "norwegian"
 PASS = "••••••••"
 
 with Site(HOST, SITE, USER, PASS) as site:
@@ -53,7 +53,7 @@ with Site(HOST, SITE, USER, PASS) as site:
     pets = site.list("Pets")
 
     # Add an item (metadata type is auto-inferred if omitted)
-    new_id = pets.add_item({"Title": "Norweigian Blue"})
+    new_id = pets.add_item({"Title": "Norwegian Blue"})
 
     # Update the item (uses MERGE)
     patch = {"Title": "Polly"} # Fields to be updated
@@ -85,27 +85,26 @@ with Site(HOST, SITE, USER, PASS) as site:
 
     # Upload a document
     with open("report.pdf", "rb") as file_handle:
-        unique_id = shared_docs.add_document("report.txt", file_handle)
+        unique_id = shared_docs.add_document("report.pdf", file_handle)
 
     # List library files
     params = {"$select": "Name,TimeCreated"}
-    files = docs.list_contents(params)
+    files = shared_docs.list_contents(params)
 
     # List files in subfolder
-    folder_files = docs.list_contents(params, "Napping", "2025")
+    folder_files = shared_docs.list_contents(params, "Napping", "2025")
 
-    # Download a document
-    report = docs.get_document("report.txt")
-    contents = report.decode()
+    # Download a document (bytes)
+    report = shared_docs.get_document("report.pdf")
 
-    # Download a document in a subfolder (ex: Shared Documents/Napping/2025/report.txt)
-    report = docs.get_document("report.txt", "Napping", "2025")
+    # Download a document in a subfolder (ex: Shared Documents/Napping/2025/report.pdf)
+    report = shared_docs.get_document("report.pdf", "Napping", "2025")
 
     # Delete a document
-    docs.delete_document("report.txt")
+    shared_docs.delete_document("report.pdf")
 
     # Delete a document in a subfolder
-    docs.delete_document("report.txt", "Napping", "2025")
+    shared_docs.delete_document("report.pdf", "Napping", "2025")
 ```
 
 ## API Overview
@@ -134,20 +133,20 @@ from sppyte import Site
 
 HOST = "https://sharepoint.example.com"
 SITE = "/sites/parrots" # relative path
-USER = "norweigen"
+USER = "norwegian"
 PASS = "••••••••"
 
 site = Site(HOST, SITE, USER, PASS)
 try:
-  connection.connect() # Start session
+  site.connect() # Start session
   # Do cool stuff
 except HTTPError as e:
   # Deal with errors
 finally:
-  connection.close() # Close session
+  site.close() # Close session
 
-# With context managment is preferred
-with Site(HOST, SITE, USER, PASS) as connection:
+# Using a context manager is preferred
+with Site(HOST, SITE, USER, PASS) as site:
   # Do cool stuff
 ```
 **Notes**
@@ -175,7 +174,7 @@ sppyte.List
 *Usage:*
 ```py
 # Given a list named 'Pets'
-pets = connection.list('Pets')
+pets = site.list('Pets')
 ```
 
 #### `Site.library(name)`
@@ -192,7 +191,7 @@ sppyte.Library
 
 ```py
 # Given a document library named 'Contracts'
-contracts = connection.library('Contracts')
+contracts = site.library('Contracts')
 ```
 
 ### List
@@ -216,7 +215,7 @@ from sppyte import Site, List
 
 HOST = "https://sharepoint.example.com"
 SITE = "/sites/parrots" # relative path
-USER = "norweigian"
+USER = "norwegian"
 PASS = "••••••••"
 
 # Given a list named 'Pets'
@@ -231,7 +230,7 @@ except HTTPError as e:
 finally:
   pets.close() # Close session
 
-# With context managment is preferred
+# Using a context manager is preferred
 with List('Pets', site) as pets:
   # Do cool stuff
 ```
@@ -253,7 +252,7 @@ Close the session.
 Add an item to a SharePoint list. Returns the added item ID.
 
 **Parameters**
-- __item__ (dict[str, str | int]): Item to be added
+- __item__ (Mapping[str, Any]): Item to be added. The mapping is not modified.
 
 **Returns:**
 int
@@ -264,7 +263,7 @@ int
 # Given a item with Title and breed fields
 new_item = {
   "Title": "Sonny",
-  "breed": "Norwiegen Blue"
+  "breed": "Norwegian Blue"
 }
 pet_id = pets.add_item(new_item)
 ```
@@ -315,10 +314,13 @@ delete_success = pets.delete_item(pet_id)
 Get contents of a SharePoint list.
 
 **Parameters**
-__params__: dict[str, str | int] - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
+- __params__: Mapping[str, str | int] | None - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
 
 **Returns:**
-list[dict[str, str | int]] - JSON decoded list items
+list[dict[str, Any]] - JSON decoded list items
+
+**Notes**
+- SharePoint returns at most 100 items unless `$top` is given.
 
 *Usage:*
 ```py
@@ -342,7 +344,7 @@ dict[str, str | int] - JSON decoded item contents
 *Usage:*
 ```py
 pet_id = 23
-pet_item = pets.get(pet_id)
+pet_item = pets.get_item(pet_id)
 ```
 
 #### `List.update_item(sp_id: int, patch: dict)`
@@ -351,7 +353,7 @@ Update an existing list item merging properties from a patch.
 
 **Parameters**
 - __sp_id__: int - SharePoint ID to update
-- __patch__: dict[str, str | int] - Dictionary of fields and values to update
+- __patch__: Mapping[str, Any] - Fields and values to update. The mapping is not modified.
 
 **Returns:**
 int - Updated SharePoint ID
@@ -386,7 +388,7 @@ from sppyte import Site, Library
 
 HOST = "https://sharepoint.example.com"
 SITE = "/sites/Parrots" # relative path
-USER = "norweigen"
+USER = "norwegian"
 PASS = "••••••••"
 
 # Given a document library named 'Contracts'
@@ -401,7 +403,7 @@ except HTTPError as e:
 finally:
   contracts.close() # Close session
 
-# With context managment is preferred
+# Using a context manager is preferred
 with Library('Contracts', site) as contracts:
   # Do cool stuff
 ```
@@ -440,7 +442,7 @@ Load a document to a SharePoint document library.
 
 **Parameters**
 - __file_name__: str - file name add
-- __document__: bytes | IO[bytes] - Streamed file content
+- __document__: bytes | IO[bytes] - File content (bytes or a binary file-like object)
 - __*subfolders__: str (Optional) - additional path folder names for nested folders
 
 **Returns:**
@@ -457,7 +459,7 @@ with open("notes.txt", "rb") as file_handler:
 Check if a folder exists in a SharePoint document library.
 
 **Parameters**
-- __folder__: str - Folder to add
+- __folder__: str - Folder to check
 - __*subfolders__: str (Optional) - Additional path folder names for nested folders
 
 **Returns:**
@@ -489,7 +491,7 @@ contracts.delete_document("notes.txt", '2025', 'January')
 Delete a folder from a SharePoint document library.
 
 **Parameters**
-- __folder__: str - Folder to add
+- __folder__: str - Folder to delete
 - __*subfolders__: str (Optional) - Additional path folder names for nested folders
 
 **Returns:**
@@ -505,7 +507,7 @@ contracts.delete_folder('2025', 'January')
 List contents of a SharePoint document library.
 
 **Parameters**
-- __params__: dict[str, str | int] - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
+- __params__: Mapping[str, str | int] | None - OData params (See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params)
 - __*subfolders__: str (Optional) - Additional path folder names for nested folders
 
 **Returns:**
@@ -523,7 +525,7 @@ files = contracts.list_contents({
 Read a document from a SharePoint document library.
 
 **Parameters**
-- __file_name__: str - File name to delete
+- __file_name__: str - File name to read
 - __*subfolders__: str (Optional) - Additional path folder names for nested folders
 
 **Returns:**
@@ -562,6 +564,7 @@ List exposes the `get_item_type` method to obtain the required list item type me
 
 ## Notes
 
+- Special characters: list titles, folder names and file names are escaped for OData string literals automatically, so names containing spaces, `'`, `#`, `%`, `?` or `&` work as-is.
 - OData Parameters: Methods like get_contents and list_contents accept any OData parameters via params (e.g., $select, $filter, $orderby, $top). See [the docs](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) for supported OData params.
 - HTTP request errors are passed through from the requests library unhandled for transparency. See [the docs](https://requests.readthedocs.io/en/latest/user/quickstart/#errors-and-exceptions) for more information.
 - SharePoint limits list response record counts by default. Use the $top OData param for larger response counts.
@@ -580,6 +583,6 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 
 ## License
 
-[MIT License](https://github.com/B-Jones-RFD/sp-rest-connect/blob/main/LICENSE)
+[MIT License](https://github.com/B-Jones-RFD/sppyte/blob/main/LICENSE)
 
 [^1]: What's the deal with this name? <sub>(S)hare(P)oint</sub> <sup>(Py)thon</sup> <sub>Si(te)</sub>

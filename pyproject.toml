@@ -9,7 +9,7 @@ description = 'Common tasks with SharePoint REST service'
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-keywords = []
+keywords = ["sharepoint", "sharepoint-rest", "odata", "ntlm", "on-premise"]
 authors = [{ name = "B-Jones-RFD" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -29,6 +29,9 @@ Source = "https://github.com/B-Jones-RFD/sppyte"
 
 [tool.hatch.version]
 path = "src/sppyte/__about__.py"
+
+[tool.hatch.envs.hatch-test]
+extra-dependencies = ["responses>=0.25"]
 
 [tool.hatch.envs.types]
 extra-dependencies = ["mypy>=1.0.0"]
@@ -52,7 +55,4 @@ exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
 testpaths = [
     "tests",
 ]
-pythonpath = [
-  "src",
-  "src/sppyte"
-]
+pythonpath = ["src"]

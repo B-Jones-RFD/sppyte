@@ -2,6 +2,8 @@ import pytest
 
 from sppyte.utils import (
     build_path,
+    odata_literal,
+    odata_path,
     parse_add_document,
     parse_add_item,
     parse_form_digest,
@@ -42,6 +44,44 @@ def test_build_path_always_leading_slash():
     assert path.startswith("/")
     # and not double leading slashes under normal inputs
     assert not path.startswith("//")
+
+
+# ------------------------- odata_literal / odata_path -----------------
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Pets", "Pets"),
+        ("Shared Documents", "Shared%20Documents"),
+        ("O'Brien", "O''Brien"),
+        ("O'Brien's #1 Report", "O''Brien''s%20%231%20Report"),
+        ("100% done?", "100%25%20done%3F"),
+        ("a&b=c", "a%26b%3Dc"),
+        ("sub/dir", "sub%2Fdir"),  # a literal keeps no path structure
+        ("naïve café", "na%C3%AFve%20caf%C3%A9"),
+        ("", ""),
+    ],
+)
+def test_odata_literal(value, expected):
+    assert odata_literal(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/sites/demo", "/sites/demo"),
+        ("/sites/demo/Shared Documents", "/sites/demo/Shared%20Documents"),
+        ("/sites/demo/Q1 '25/100% done", "/sites/demo/Q1%20''25/100%25%20done"),
+        ("/", "/"),
+        ("", ""),
+    ],
+)
+def test_odata_path(path, expected):
+    assert odata_path(path) == expected
+
+
+def test_odata_path_preserves_slashes_only_as_separators():
+    assert odata_path("/a/b'c/d").count("/") == 3
+    assert "%2F" not in odata_path("/a/b/c")
 
 
 # ------------------------- parse_form_digest --------------------------

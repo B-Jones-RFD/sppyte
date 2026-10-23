@@ -12,6 +12,7 @@ This module exposes three main classes:
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import IO, Any, TypeAlias
 
 from requests import Response, Session
@@ -20,6 +21,8 @@ from requests_ntlm import HttpNtlmAuth
 from sppyte.errors import SessionError
 from sppyte.utils import (
     build_path,
+    odata_literal,
+    odata_path,
     parse_add_document,
     parse_add_item,
     parse_form_digest,
@@ -29,8 +32,8 @@ from sppyte.utils import (
 FORBIDDEN = 403
 
 
-Param: TypeAlias = tuple[str, str] | dict[str, str | int]
-Params: TypeAlias = list[Param] | None
+ParamValue: TypeAlias = str | int
+Params: TypeAlias = Mapping[str, ParamValue] | Sequence[tuple[str, ParamValue]] | None
 
 
 class Site:
@@ -49,9 +52,6 @@ class Site:
             docs.add_folder("Reports", "2025")
     """
 
-    session: Session | None = None
-    form_digest: str | None = None
-
     def __init__(
         self,
         host: str,
@@ -64,6 +64,8 @@ class Site:
         self.relative_url = site_relative_url
         self.username = username
         self.password = password
+        self.session: Session | None = None
+        self.form_digest: str | None = None
 
     def __enter__(self):
         self.connect()
@@ -158,6 +160,11 @@ class List:
     def __exit__(self, *args) -> None:
         self.site.close()
 
+    @property
+    def _base_path(self) -> str:
+        """Site-relative REST path of this list, with the title escaped."""
+        return f"_api/web/lists/GetByTitle('{odata_literal(self.name)}')"
+
     def connect(self) -> None:
         """Create the NTLM-authenticated session and fetch a form digest."""
         self.site.connect()
@@ -166,27 +173,26 @@ class List:
         """Close the underlying HTTP session."""
         self.site.close()
 
-    def add_item(self, item: dict[str, Any]) -> int:
+    def add_item(self, item: Mapping[str, Any]) -> int:
         """
         Add a list item.
 
         List item entity type metadata (ie. `__metadata.type`) will be added automatically.
-        Returns the SharePoint item ID.
+        The `item` mapping is not modified. Returns the SharePoint item ID.
         """
-
-        if "__metadata" not in item:
-            item_type = self.get_item_type()
-            item["__metadata"] = {"type": item_type}
+        payload = dict(item)
+        if "__metadata" not in payload:
+            payload = {"__metadata": {"type": self.get_item_type()}, **payload}
 
         r = self.site.request(
             method="post",
-            path=f"_api/web/lists/GetByTitle('{self.name}')/items",
+            path=f"{self._base_path}/items",
             headers={
                 "Accept": "application/json;odata=nometadata",
                 "Content-Type": "application/json;odata=verbose",
                 "X-RequestDigest": self.site.form_digest,
             },
-            json=item,
+            json=payload,
         )
         return parse_add_item(r.json())
 
@@ -199,7 +205,7 @@ class List:
         """
         self.site.request(
             method="post",
-            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')/AttachmentFiles/add(FileName='{file_name}')",
+            path=f"{self._base_path}/items('{sp_id}')/AttachmentFiles/add(FileName='{odata_literal(file_name)}')",
             headers={
                 "Accept": "application/json;odata=nometadata",
                 "Content-Type": "application/json;odata=verbose",
@@ -216,9 +222,9 @@ class List:
         """
         self.site.request(
             method="post",
-            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')",
+            path=f"{self._base_path}/items('{sp_id}')",
             headers={
-                "Accept": "application/json;odata=verbose",
+                "Accept": "application/json;odata=nometadata",
                 "Content-Type": "application/json;odata=verbose",
                 "X-HTTP-Method": "DELETE",
                 "If-Match": "*",
@@ -227,14 +233,16 @@ class List:
         )
         return True
 
-    def get_contents(self, params: Params = None) -> Any:
+    def get_contents(self, params: Params = None) -> list[dict[str, Any]]:
         """
-        Return raw JSON of list items; pass OData params like $select, $filter,
-        $top, etc. Example: get_contents({"$select":"Id,Title", "$top"=5})
+        Return list items; pass OData params like $select, $filter,
+        $top, etc. Example: get_contents({"$select": "Id,Title", "$top": 5})
+
+        SharePoint returns at most 100 items unless `$top` is given.
         """
         r = self.site.request(
             method="get",
-            path=f"_api/web/lists/GetByTitle('{self.name}')/items",
+            path=f"{self._base_path}/items",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
@@ -248,7 +256,7 @@ class List:
         """
         r = self.site.request(
             method="get",
-            path=f"_api/web/lists/GetByTitle('{self.name}')",
+            path=self._base_path,
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
@@ -260,27 +268,27 @@ class List:
         """Fetch a single list item by SharePoint ID."""
         r = self.site.request(
             method="get",
-            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')",
+            path=f"{self._base_path}/items('{sp_id}')",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
         )
         return r.json()
 
-    def update_item(self, sp_id: int, patch: dict[str, Any]) -> int:
+    def update_item(self, sp_id: int, patch: Mapping[str, Any]) -> int:
         """
-        Merge-update a list item. Provide a patch dictionary of fields to be updated.
+        Merge-update a list item. Provide a patch mapping of fields to be updated.
 
         List item entity type metadata (ie. `__metadata.type`) will be added automatically.
-        Returns the item ID.
+        The `patch` mapping is not modified. Returns the item ID.
         """
-        if "__metadata" not in patch:
-            item_type = self.get_item_type()
-            patch["__metadata"] = {"type": item_type}
+        payload = dict(patch)
+        if "__metadata" not in payload:
+            payload = {"__metadata": {"type": self.get_item_type()}, **payload}
 
         self.site.request(
             method="post",
-            path=f"_api/web/lists/GetByTitle('{self.name}')/items('{sp_id}')",
+            path=f"{self._base_path}/items('{sp_id}')",
             headers={
                 "Accept": "application/json;odata=nometadata",
                 "Content-Type": "application/json;odata=verbose",
@@ -289,7 +297,7 @@ class List:
                 "If-Match": "*",
                 "X-RequestDigest": self.site.form_digest,
             },
-            json=patch,
+            json=payload,
         )
         return sp_id
 
@@ -316,14 +324,24 @@ class Library:
         """Close the underlying HTTP session."""
         self.site.close()
 
+    def _server_relative_url(self, *parts: str) -> str:
+        """Server-relative URL of a path beneath this library (unescaped)."""
+        return build_path(self.site.relative_url, self.name, *parts)
+
+    def _folder_path(self, *parts: str) -> str:
+        """Site-relative REST path addressing a folder beneath this library."""
+        return f"_api/web/GetFolderByServerRelativeUrl('{odata_path(self._server_relative_url(*parts))}')"
+
+    def _file_path(self, *parts: str) -> str:
+        """Site-relative REST path addressing a file beneath this library."""
+        return f"_api/web/GetFileByServerRelativeUrl('{odata_path(self._server_relative_url(*parts))}')"
+
     def add_folder(self, folder: str, *subfolders: str) -> bool:
         """
         Create a (nested) folder path within the library.
 
         Returns True if the folder already exists (per API) or was created.
         """
-        folder_relative_url = build_path(folder, *subfolders)
-
         r = self.site.request(
             method="post",
             path="_api/web/folders",
@@ -333,7 +351,7 @@ class Library:
                 "X-RequestDigest": self.site.form_digest,
             },
             json={
-                "ServerRelativeUrl": self.name + folder_relative_url,
+                "ServerRelativeUrl": self._server_relative_url(folder, *subfolders),
             },
         )
         return r.json().get("Exists", False)
@@ -341,18 +359,18 @@ class Library:
     def add_document(
         self,
         file_name: str,
-        document: IO[bytes],
+        document: IO[bytes] | bytes,
         *subfolders: str,
     ) -> str:
         """
         Upload a document (streamed) into the given subfolder path.
 
-        Returns the document UniqueId. `document` should be a binary file-like
-        object (e.g., open('file.pdf', 'rb')).
+        Returns the document UniqueId. `document` should be bytes or a binary
+        file-like object (e.g., open('file.pdf', 'rb')).
         """
         r = self.site.request(
             method="post",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders)}')/Files/add(url='{file_name}',overwrite=true)",
+            path=f"{self._folder_path(*subfolders)}/Files/add(url='{odata_literal(file_name)}',overwrite=true)",
             headers={
                 "Accept": "application/json;odata=nometadata",
                 "Content-Type": "application/octet-stream",
@@ -367,7 +385,7 @@ class Library:
         """Return True if a folder path exists beneath this library."""
         r = self.site.request(
             method="get",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, folder, *subfolders)}')/Exists",
+            path=f"{self._folder_path(folder, *subfolders)}/Exists",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
@@ -382,7 +400,7 @@ class Library:
         """
         self.site.request(
             method="post",
-            path=f"_api/web/GetFileByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders, file_name)}')",
+            path=self._file_path(*subfolders, file_name),
             headers={
                 "If-Match": "*",  # Ignore current ETag; force delete.
                 "X-HTTP-Method": "DELETE",
@@ -398,7 +416,7 @@ class Library:
         """
         self.site.request(
             method="post",
-            path=f"_api/web/_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, folder, *subfolders)}')",
+            path=self._folder_path(folder, *subfolders),
             headers={
                 "If-Match": "*",
                 "X-HTTP-Method": "DELETE",
@@ -407,15 +425,15 @@ class Library:
         )
         return True
 
-    def list_contents(self, params: Params = None, *subfolders: str) -> list[Any]:
+    def list_contents(self, params: Params = None, *subfolders: str) -> list[dict[str, Any]]:
         """
         List file metadata within a folder path. Returns a list of items.
         Accepts OData params such as $select, $top, etc.
-        Example: list_contents({"$select":"Name, ServerRelativeUrl", "$top"=5})
+        Example: list_contents({"$select": "Name,ServerRelativeUrl", "$top": 5})
         """
         r = self.site.request(
             method="get",
-            path=f"_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders)}')/Files",
+            path=f"{self._folder_path(*subfolders)}/Files",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
@@ -433,7 +451,7 @@ class Library:
         """
         r = self.site.request(
             method="get",
-            path=f"/_api/web/GetFolderByServerRelativeUrl('{build_path(self.site.relative_url, self.name, *subfolders)}')/Files('{file_name}')/$value",
+            path=f"{self._folder_path(*subfolders)}/Files('{odata_literal(file_name)}')/$value",
             headers={
                 "Accept": "application/json;odata=nometadata",
             },
