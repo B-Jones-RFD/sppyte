@@ -116,6 +116,8 @@ class FakeNtlmAdapter(BaseAdapter):
         auth = request.headers.get("Authorization")
         if auth is None:
             return self._response(request, 401, {"WWW-Authenticate": self.schemes})
+        if isinstance(auth, bytes):
+            auth = auth.decode("ascii")
         scheme, _, token = auth.partition(" ")
         if scheme.lower() != "ntlm":
             return self._response(request, 401, {"WWW-Authenticate": self.schemes})
