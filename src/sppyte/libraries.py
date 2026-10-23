@@ -49,20 +49,27 @@ class Library:
         """Server-relative URL of a path beneath this library (unescaped)."""
         return build_path(self.site.relative_url, self.name, *parts)
 
-    def _folder_path(self, *parts: str) -> str:
-        """Site-relative REST path addressing a folder beneath this library."""
-        return f"_api/web/GetFolderByServerRelativeUrl('{odata_path(self.server_relative_url(*parts))}')"
+    def folder_path(self, *subfolders: str) -> str:
+        """
+        Site-relative REST path addressing a folder beneath this library
+        (``_api/web/GetFolderByServerRelativeUrl('...')``, escaped). Useful
+        for `Site.request` and `Batch` sub-requests.
+        """
+        return f"_api/web/GetFolderByServerRelativeUrl('{odata_path(self.server_relative_url(*subfolders))}')"
 
-    def _file_path(self, *parts: str) -> str:
-        """Site-relative REST path addressing a file beneath this library."""
-        return f"_api/web/GetFileByServerRelativeUrl('{odata_path(self.server_relative_url(*parts))}')"
+    def file_path(self, file_name: str, *subfolders: str) -> str:
+        """
+        Site-relative REST path addressing a file beneath this library
+        (``_api/web/GetFileByServerRelativeUrl('...')``, escaped).
+        """
+        return f"_api/web/GetFileByServerRelativeUrl('{odata_path(self.server_relative_url(*subfolders, file_name))}')"
 
     # --------------------------------------------------------------- reads ----
     def folder_exists(self, folder: str, *subfolders: str) -> bool:
         """Return True if a folder path exists beneath this library."""
         r = self.site.request(
             "get",
-            f"{self._folder_path(folder, *subfolders)}/Exists",
+            f"{self.folder_path(folder, *subfolders)}/Exists",
             headers={"Accept": JSON_NOMETADATA},
         )
         return r.json().get("value", False)
@@ -70,7 +77,7 @@ class Library:
     def _collection(self, kind: str, subfolders: tuple[str, ...], params: Params) -> Page:
         r = self.site.request(
             "get",
-            f"{self._folder_path(*subfolders)}/{kind}",
+            f"{self.folder_path(*subfolders)}/{kind}",
             headers={"Accept": JSON_NOMETADATA},
             params=params,
         )
@@ -118,7 +125,7 @@ class Library:
     def _open_document(self, file_name: str, subfolders: tuple[str, ...]) -> Response:
         return self.site.request(
             "get",
-            f"{self._folder_path(*subfolders)}/Files('{odata_literal(file_name)}')/$value",
+            f"{self.folder_path(*subfolders)}/Files('{odata_literal(file_name)}')/$value",
             headers={"Accept": "application/octet-stream"},
             stream=True,
         )
@@ -197,7 +204,7 @@ class Library:
             digest: Form digest to send instead of the managed one.
         """
         flag = "true" if overwrite else "false"
-        path = f"{self._folder_path(*subfolders)}/Files/add(url='{odata_literal(file_name)}',overwrite={flag})"
+        path = f"{self.folder_path(*subfolders)}/Files/add(url='{odata_literal(file_name)}',overwrite={flag})"
         headers = {"Accept": JSON_NOMETADATA, "Content-Type": "application/octet-stream"}
         if isinstance(document, str | os.PathLike):
             with Path(document).open("rb") as fh:
@@ -210,7 +217,7 @@ class Library:
         """Delete a document by name within an optional nested folder path. Returns True."""
         self.site.request(
             "post",
-            self._file_path(*subfolders, file_name),
+            self.file_path(file_name, *subfolders),
             headers={"If-Match": "*", "X-HTTP-Method": "DELETE"},
             digest=digest or True,
         )
@@ -220,7 +227,7 @@ class Library:
         """Delete a folder path. Returns True; failures raise."""
         self.site.request(
             "post",
-            self._folder_path(folder, *subfolders),
+            self.folder_path(folder, *subfolders),
             headers={"If-Match": "*", "X-HTTP-Method": "DELETE"},
             digest=digest or True,
         )

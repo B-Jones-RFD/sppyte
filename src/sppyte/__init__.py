@@ -10,6 +10,7 @@ remains transparent and easy to debug.
 """
 
 from sppyte.__about__ import __version__
+from sppyte.batch import Batch, BatchRequest, BatchResponse
 from sppyte.errors import (
     AuthError,
     ConfigurationError,
@@ -26,6 +27,9 @@ from sppyte.site import Site
 
 __all__ = [
     "AuthError",
+    "Batch",
+    "BatchRequest",
+    "BatchResponse",
     "ConfigurationError",
     "Library",
     "List",

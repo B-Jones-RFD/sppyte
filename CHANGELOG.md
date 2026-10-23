@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0a3] - 2026-10-23
+
+### Added
+
+- CAML queries: `List.query(view_xml, *, paging_info=None, params=None, digest=None)` (``GetItems``),
+  `List.iter_query` and `List.query_all`, which page by the last item's `Id` using `<RowLimit>`.
+- `$batch`: `Site.batch()` returns a `Batch` builder (`get` / `post` / `merge` / `patch` / `delete` / `add`,
+  `send()`); consecutive writes share one changeset; one `BatchResponse` per sub-request with
+  `status`, `ok`, `headers`, `body`, `json` and `error`. Sub-requests must be on the site's host.
+  `sppyte.batch` also exposes `build_batch_body`, `parse_batch_response`, `multipart_boundary`.
+- Public REST path helpers: `List.path`, `Library.folder_path(*subfolders)`,
+  `Library.file_path(file_name, *subfolders)`.
+
 ## [1.0.0a2] - 2026-10-23
 
 ### Changed (breaking)
@@ -93,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...HEAD
+[1.0.0a3]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...v1.0.0a3
 [1.0.0a2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...v1.0.0a2
 [1.0.0a1]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...v1.0.0a1
 [0.2.0]: https://github.com/B-Jones-RFD/sppyte/compare/v0.1.7...v0.2.0

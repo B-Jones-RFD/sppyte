@@ -19,6 +19,8 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
   - [Connecting](#connecting)
   - [Write operations and the request digest](#write-operations-and-the-request-digest)
   - [Paging](#paging)
+  - [CAML queries and the 5,000-item threshold](#caml-queries-and-the-5000-item-threshold)
+  - [Batching requests](#batching-requests)
   - [Large files](#large-files)
   - [Errors](#errors)
   - [Timeouts, TLS and proxies](#timeouts-tls-and-proxies)
@@ -38,12 +40,14 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
 - `List` helper to:
   - Add / update / delete items
   - Iterate every item across pages (`iter_items`, `get_all_items`)
+  - Run CAML queries (`query`, `iter_query`) to get past the 5,000-item view threshold
   - Use [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params to control item responses
   - Add **attachments** to items
 - `Library` helper to:
   - Add / delete **folders**
   - Upload / download / delete **documents**, streaming large files in both directions
   - List files and folders, page through them, and control output with [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params
+- `Site.batch()` to send several REST calls in one `/_api/$batch` round trip (SharePoint 2016+).
 - Exceptions that carry SharePoint's own error message, status code and `Retry-After`.
 - Access other [SharePoint REST service](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/get-to-know-the-sharepoint-rest-service) endpoints as needed.
 - Fully typed (`py.typed`).
@@ -180,7 +184,52 @@ Usually you want the helpers that do this for you:
 
 All accept `max_pages=` to stop early. `iter_*` issue one request per page as you consume them. `Site.get_page(next_link)` refuses a link that is not on the site's host, so credentials are never sent elsewhere.
 
-> `$filter` on a non-indexed column fails on lists above the 5,000-item view threshold regardless of paging; that needs a CAML query (planned for a later release).
+> `$filter` on a non-indexed column fails on lists above the 5,000-item view threshold regardless of paging; use a [CAML query](#caml-queries-and-the-5000-item-threshold) for those.
+
+### CAML queries and the 5,000-item threshold
+
+`List.query(view_xml)` posts a CAML `<View>` to `GetItems`. A `<Where>` on an **indexed** column is evaluated by SQL Server, so it works on lists far above the threshold where `$filter` returns an error. `$select` / `$expand` still go in `params`; `$filter` and `$top` belong in the CAML (`<Where>`, `<RowLimit>`).
+
+```py
+view = """
+<View>
+  <Query>
+    <Where><Eq><FieldRef Name='Status'/><Value Type='Text'>Open</Value></Eq></Where>
+    <OrderBy><FieldRef Name='ID'/></OrderBy>
+  </Query>
+  <RowLimit>500</RowLimit>
+</View>
+"""
+
+page = tasks.query(view, params={"$select": "Id,Title"})            # first 500
+page = tasks.query(view, paging_info=f"Paged=TRUE&p_ID={page[-1]['Id']}")  # next 500
+
+for task in tasks.iter_query(view, params={"$select": "Id,Title"}):  # all of them
+    ...
+everything = tasks.query_all(view)
+```
+
+`iter_query` / `query_all` require a `<RowLimit>` and page by the `Id` of the last item returned, which assumes the view is ordered by ID ascending (the default). Keep `Id` in `$select` if you restrict columns.
+
+### Batching requests
+
+`site.batch()` collects sub-requests and sends them as one `POST /_api/$batch` (SharePoint 2016+ and Subscription Edition; not 2013). Consecutive writes are grouped into one changeset, which SharePoint applies atomically; reads are separate parts. Each sub-request gets its own `BatchResponse`, and a failing sub-request does **not** fail the batch — check `ok` on each.
+
+```py
+batch = site.batch()
+batch.get(f"{tasks.path}/items", params={"$select": "Id,Title", "$top": 5})
+batch.post(f"{tasks.path}/items", {"__metadata": {"type": tasks.item_type}, "Title": "A"})
+batch.merge(f"{tasks.path}/items(7)", {"__metadata": {"type": tasks.item_type}, "Title": "B"})
+batch.delete(f"{tasks.path}/items(8)")
+
+for res in batch.send():
+    if res.ok:
+        print(res.status, res.json)
+    else:
+        print(res.status, res.error.message if res.error else res.body)
+```
+
+Paths are site-relative (`_api/...`) or absolute URLs on the site's host; `List.path`, `Library.folder_path(...)` and `Library.file_path(...)` give you escaped paths to build on. Defaults per part: `Accept: application/json;odata=nometadata`, `Content-Type: application/json;odata=verbose` when there is a body, and `If-Match: *` for `MERGE` / `PATCH` / `DELETE`; pass `headers=` to override. `BatchResponse` has `status`, `ok`, `headers` (lower-cased), `body`, `json` (parsed when the part is JSON) and `error` (SharePoint's parsed error for a failed part).
 
 ### Large files
 
@@ -285,6 +334,7 @@ See [Connecting](#connecting) and [Timeouts, TLS and proxies](#timeouts-tls-and-
 | `get_form_digest()` | Always fetch a fresh digest (and cache it). |
 | `invalidate_digest()` | Drop the cached digest. |
 | `get_page(next_link)` | Fetch the page a `Page.next_link` points at (same host only). |
+| `batch()` | A `Batch` builder; see [Batching requests](#batching-requests). |
 | `form_digest` | The cached digest, or `None`. |
 | `session` | The `requests.Session`, or `None` before first use. |
 | `site_path`, `host`, `relative_url`, `principal` | Normalised connection details (`principal` is `DOMAIN\user`). |
@@ -300,11 +350,15 @@ Obtain with `site.list(name)` (or `List(name, site)`). `name` is the list **titl
 | `iter_items(params=None, *, max_pages=None)` | `Iterator[dict]` | Every item across pages, lazily. |
 | `get_all_items(params=None, *, max_pages=None)` | `list[dict]` | Every item across pages. |
 | `get_item(sp_id)` | `dict` | One item by ID. |
+| `query(view_xml, *, paging_info=None, params=None, digest=None)` | `Page` | CAML `GetItems`. |
+| `iter_query(view_xml, *, params=None, max_pages=None, digest=None)` | `Iterator[dict]` | Every match, paging by last `Id`; needs `<RowLimit>`. |
+| `query_all(view_xml, *, params=None, max_pages=None, digest=None)` | `list[dict]` | Every match, collected. |
 | `add_item(item, *, digest=None)` | `dict` | The created item as SharePoint returned it, including `Id`. `__metadata.type` is added unless present; `item` is not modified. |
 | `update_item(sp_id, patch, *, digest=None)` | `int` | MERGE-update; omitted fields are untouched. Returns `sp_id`. |
 | `delete_item(sp_id, *, digest=None)` | `bool` | `True`; failures raise. |
 | `add_attachment(sp_id, file_name, attachment, *, digest=None)` | `dict` | The `SP.Attachment` created (`FileName`, `ServerRelativeUrl`). `attachment` is `bytes` or a binary file object. |
 | `item_type` | `str` | `ListItemEntityTypeFullName`, fetched once and cached. |
+| `path` | `str` | Site-relative REST path, e.g. `_api/web/lists/GetByTitle('Tasks')`. |
 | `get_item_type()` | `str` | Fetch it again and refresh the cache. |
 
 `params` is a mapping (or sequence of pairs) of OData options, e.g. `{"$select": "Id,Title", "$filter": "Status eq 'Open'", "$top": 500}`.
@@ -329,6 +383,7 @@ Obtain with `site.library(name)` (or `Library(name, site)`). Folder arguments ar
 | `delete_document(file_name, *subfolders, digest=None)` | `bool` | |
 | `delete_folder(folder, *subfolders, digest=None)` | `bool` | |
 | `server_relative_url(*parts)` | `str` | e.g. `/sites/parrots/Shared Documents/Reports`. |
+| `folder_path(*subfolders)` / `file_path(file_name, *subfolders)` | `str` | Escaped site-relative REST paths for extension and batch requests. |
 
 ## Migrating to 1.0
 

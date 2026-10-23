@@ -210,6 +210,70 @@ def test_iter_pages_max_pages(pets, mocked):
     assert len(mocked.calls) == 3  # contextinfo + 2 pages
 
 
+def test_list_path_is_public(pets):
+    assert pets.path == "_api/web/lists/GetByTitle('Pets')"
+
+
+VIEW = (
+    "<View><Query><Where><Eq><FieldRef Name='Status'/><Value Type='Text'>Open</Value></Eq></Where></Query>"
+    "<RowLimit>2</RowLimit></View>"
+)
+
+
+def test_query_posts_caml(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 1}]})
+    page = pets.query(VIEW, params={"$select": "Id,Title"})
+    assert page == [{"Id": 1}]
+    assert isinstance(page, Page)
+    req = mocked.calls[-1].request
+    assert req.url == f"{LIST_URL}/GetItems?%24select=Id%2CTitle"
+    assert req.headers["X-RequestDigest"] == DIGEST
+    assert req.headers["Content-Type"] == "application/json;odata=verbose"
+    assert json_body(mocked.calls[-1]) == {"query": {"__metadata": {"type": "SP.CamlQuery"}, "ViewXml": VIEW}}
+
+
+def test_query_with_paging_info(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"value": []})
+    pets.query(VIEW, paging_info="Paged=TRUE&p_ID=500")
+    body = json_body(mocked.calls[-1])
+    assert body["query"]["ListItemCollectionPosition"] == {"PagingInfo": "Paged=TRUE&p_ID=500"}
+
+
+def test_iter_query_pages_by_last_id(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 1}, {"Id": 2}]})
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 3}, {"Id": 4}]})
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 5}]})
+    assert [i["Id"] for i in pets.iter_query(VIEW)] == [1, 2, 3, 4, 5]
+    bodies = [json_body(c) for c in mocked.calls[1:]]
+    assert "ListItemCollectionPosition" not in bodies[0]["query"]
+    assert bodies[1]["query"]["ListItemCollectionPosition"] == {"PagingInfo": "Paged=TRUE&p_ID=2"}
+    assert bodies[2]["query"]["ListItemCollectionPosition"] == {"PagingInfo": "Paged=TRUE&p_ID=4"}
+
+
+def test_iter_query_stops_on_short_page_and_max_pages(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 1}, {"Id": 2}]})
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 3}, {"Id": 4}]})
+    assert len(pets.query_all(VIEW, max_pages=2)) == 4
+    assert len(mocked.calls) == 3
+
+
+def test_iter_query_handles_full_last_page(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Id": 1}, {"Id": 2}]})
+    mocked.add(responses.POST, ANY_URL, json={"value": []})
+    assert len(pets.query_all(VIEW)) == 2
+
+
+def test_iter_query_requires_row_limit(pets):
+    with pytest.raises(ValueError, match="RowLimit"):
+        next(pets.iter_query("<View></View>"))
+
+
+def test_iter_query_requires_id_when_paging(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"value": [{"Title": "a"}, {"Title": "b"}]})
+    with pytest.raises(ResponseFormatError, match="Id"):
+        list(pets.iter_query(VIEW))
+
+
 def test_iter_items_is_lazy(pets, mocked):
     _three_pages(mocked, f"{LIST_URL}/items")
     it = pets.iter_items()
@@ -266,6 +330,12 @@ def docs(site) -> Library:
 def test_server_relative_url(docs):
     assert docs.server_relative_url() == "/sites/parrots/Shared Documents"
     assert docs.server_relative_url("A", "B") == "/sites/parrots/Shared Documents/A/B"
+
+
+def test_public_rest_paths(docs):
+    sru = "/sites/parrots/Shared%20Documents"
+    assert docs.folder_path("A", "B") == f"_api/web/GetFolderByServerRelativeUrl('{sru}/A/B')"
+    assert docs.file_path("f.txt", "A") == f"_api/web/GetFileByServerRelativeUrl('{sru}/A/f.txt')"
 
 
 def test_add_folder_uses_site_relative_url(docs, mocked):

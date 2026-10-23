@@ -7,8 +7,10 @@ sppyte.lists
 
 from __future__ import annotations
 
+import re
 from typing import IO, TYPE_CHECKING, Any
 
+from sppyte.errors import ResponseFormatError
 from sppyte.odata import Page, Params, follow_pages, odata_literal, parse_page
 from sppyte.utils import parse_created_item, parse_item_type, parse_object
 
@@ -19,6 +21,8 @@ if TYPE_CHECKING:
 
 JSON_NOMETADATA = "application/json;odata=nometadata"
 JSON_VERBOSE = "application/json;odata=verbose"
+
+_ROW_LIMIT_RE = re.compile(r"<RowLimit(?:\s[^>]*)?>\s*(\d+)\s*</RowLimit>", re.IGNORECASE)
 
 
 class List:
@@ -38,8 +42,12 @@ class List:
         return f"List({self.name!r}, {self.site!r})"
 
     @property
-    def _base_path(self) -> str:
-        """Site-relative REST path of this list, with the title escaped."""
+    def path(self) -> str:
+        """
+        Site-relative REST path of this list (title escaped), e.g.
+        ``_api/web/lists/GetByTitle('Tasks')``. Useful for `Site.request`
+        and `Batch` sub-requests: ``f"{tasks.path}/items"``.
+        """
         return f"_api/web/lists/GetByTitle('{odata_literal(self.name)}')"
 
     # ------------------------------------------------------------ metadata ----
@@ -57,7 +65,7 @@ class List:
         """Fetch ``ListItemEntityTypeFullName`` from SharePoint and refresh the cache."""
         r = self.site.request(
             "get",
-            self._base_path,
+            self.path,
             headers={"Accept": JSON_NOMETADATA},
             params={"$select": "ListItemEntityTypeFullName"},
         )
@@ -82,7 +90,7 @@ class List:
         """
         r = self.site.request(
             "get",
-            f"{self._base_path}/items",
+            f"{self.path}/items",
             headers={"Accept": JSON_NOMETADATA},
             params=params,
         )
@@ -105,11 +113,97 @@ class List:
         """Collect every item across all pages into one list."""
         return list(self.iter_items(params, max_pages=max_pages))
 
+    # ---------------------------------------------------------------- CAML ----
+    def query(
+        self,
+        view_xml: str,
+        *,
+        paging_info: str | None = None,
+        params: Params = None,
+        digest: str | None = None,
+    ) -> Page:
+        """
+        Run a CAML query (``POST .../GetItems``) and return the matching items.
+
+        Use this instead of ``$filter`` on lists above the 5,000-item view
+        threshold: a ``<Where>`` on an indexed column is evaluated by SQL
+        Server and is not subject to it. Page with ``<RowLimit>`` in the view
+        and `paging_info` (``"Paged=TRUE&p_ID=<last Id>"``), or let
+        `iter_query` do it.
+
+        Args:
+            view_xml: CAML ``<View>`` XML, e.g. ``<View><Query><Where><Eq><FieldRef Name='Status'/>
+                <Value Type='Text'>Open</Value></Eq></Where></Query><RowLimit>500</RowLimit></View>``
+            paging_info: Position token for the next page; omit for the first.
+            params: OData options such as ``$select`` / ``$expand`` (``$filter`` and
+                ``$top`` belong in the CAML).
+            digest: Form digest to send instead of the managed one (``GetItems`` is a POST).
+        """
+        query: dict[str, Any] = {"__metadata": {"type": "SP.CamlQuery"}, "ViewXml": view_xml}
+        if paging_info is not None:
+            query["ListItemCollectionPosition"] = {"PagingInfo": paging_info}
+        r = self.site.request(
+            "post",
+            f"{self.path}/GetItems",
+            headers={"Accept": JSON_NOMETADATA, "Content-Type": JSON_VERBOSE},
+            params=params,
+            json={"query": query},
+            digest=digest or True,
+        )
+        return parse_page(r.json())
+
+    def iter_query(
+        self,
+        view_xml: str,
+        *,
+        params: Params = None,
+        max_pages: int | None = None,
+        digest: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """
+        Yield every item matching a CAML query, one ``GetItems`` request per page.
+
+        `view_xml` must contain a ``<RowLimit>``; each page is requested with
+        ``Paged=TRUE&p_ID=<Id of the last item>``, which assumes the view is
+        ordered by ID ascending (the default when no ``<OrderBy>`` is given).
+        Include ``Id`` in ``$select`` if you restrict the columns.
+        """
+        match = _ROW_LIMIT_RE.search(view_xml)
+        if not match:
+            msg = "iter_query needs a <RowLimit> in view_xml to page"
+            raise ValueError(msg)
+        row_limit = int(match.group(1))
+        paging_info: str | None = None
+        count = 0
+        while True:
+            page = self.query(view_xml, paging_info=paging_info, params=params, digest=digest)
+            yield from page
+            count += 1
+            if len(page) < row_limit or (max_pages is not None and count >= max_pages):
+                return
+            last = page[-1]
+            sp_id = last.get("Id", last.get("ID"))
+            if not isinstance(sp_id, int) or isinstance(sp_id, bool):
+                msg = "Item id (include Id in $select to page a CAML query)"
+                raise ResponseFormatError(msg)
+            paging_info = f"Paged=TRUE&p_ID={sp_id}"
+
+    def query_all(
+        self,
+        view_xml: str,
+        *,
+        params: Params = None,
+        max_pages: int | None = None,
+        digest: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Collect every item matching a CAML query across pages (see `iter_query`)."""
+        return list(self.iter_query(view_xml, params=params, max_pages=max_pages, digest=digest))
+
     def get_item(self, sp_id: int) -> dict[str, Any]:
         """Fetch a single list item by SharePoint ID."""
         r = self.site.request(
             "get",
-            f"{self._base_path}/items('{sp_id}')",
+            f"{self.path}/items('{sp_id}')",
             headers={"Accept": JSON_NOMETADATA},
         )
         return r.json()
@@ -127,7 +221,7 @@ class List:
         """
         r = self.site.request(
             "post",
-            f"{self._base_path}/items",
+            f"{self.path}/items",
             headers={"Accept": JSON_NOMETADATA, "Content-Type": JSON_VERBOSE},
             json=self._with_metadata(item),
             digest=digest or True,
@@ -143,7 +237,7 @@ class List:
         """
         self.site.request(
             "post",
-            f"{self._base_path}/items('{sp_id}')",
+            f"{self.path}/items('{sp_id}')",
             headers={
                 "Accept": JSON_NOMETADATA,
                 "Content-Type": JSON_VERBOSE,
@@ -159,7 +253,7 @@ class List:
         """Delete a list item by its SharePoint ID. Returns True; failures raise."""
         self.site.request(
             "post",
-            f"{self._base_path}/items('{sp_id}')",
+            f"{self.path}/items('{sp_id}')",
             headers={
                 "Accept": JSON_NOMETADATA,
                 "Content-Type": JSON_VERBOSE,
@@ -187,7 +281,7 @@ class List:
         """
         r = self.site.request(
             "post",
-            f"{self._base_path}/items('{sp_id}')/AttachmentFiles/add(FileName='{odata_literal(file_name)}')",
+            f"{self.path}/items('{sp_id}')/AttachmentFiles/add(FileName='{odata_literal(file_name)}')",
             headers={"Accept": JSON_NOMETADATA, "Content-Type": "application/octet-stream"},
             data=attachment,
             digest=digest or True,

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from requests import Response, Session
 from requests_ntlm import HttpNtlmAuth
 
+from sppyte.batch import Batch
 from sppyte.errors import FORBIDDEN, AuthError, ConfigurationError, raise_for_status
 from sppyte.libraries import Library
 from sppyte.lists import List
@@ -280,6 +281,13 @@ class Site:
         Example: site.library("Shared Documents").list_contents()
         """
         return Library(name, self)
+
+    def batch(self) -> Batch:
+        """
+        Start a `Batch` of sub-requests to send in one ``/_api/$batch`` round
+        trip (SharePoint 2016+). See `sppyte.batch`.
+        """
+        return Batch(self)
 
 
 # ------------------------------------------------------------- validation ----
