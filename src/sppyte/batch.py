@@ -1,25 +1,26 @@
-"""
-sppyte.batch
-~~~~~~~~~~~~
+"""OData `$batch` support: send several REST requests in one round trip.
 
-OData ``$batch`` support: send several REST requests in one round trip.
+SharePoint 2016+ and Subscription Edition support `/_api/$batch`; SharePoint
+2013 does not. Each sub-request gets its own `BatchResponse`; a failing
+sub-request does not fail the batch, so check `BatchResponse.ok`. Consecutive
+writes are grouped into one changeset (atomic on the server); reads are sent
+as individual parts. Order is preserved.
 
-SharePoint 2016+ and Subscription Edition support ``/_api/$batch``;
-SharePoint 2013 does not. Each sub-request gets its own `BatchResponse`; a
-failing sub-request does not fail the batch, so check `BatchResponse.ok`.
-Consecutive writes are grouped into one changeset (atomic on the server);
-reads are sent as individual parts. Order is preserved.
-
-Example::
-
+Example:
+    ```python
     batch = site.batch()
     batch.get(f"{pets.path}/items", params={"$top": 5})
-    batch.post(f"{pets.path}/items", json={"__metadata": {"type": pets.item_type}, "Title": "A"})
-    batch.merge(f"{pets.path}/items(7)", json={"__metadata": {"type": pets.item_type}, "Title": "B"})
-    responses = batch.send()
-    for res in responses:
+    batch.post(
+        f"{pets.path}/items", {"__metadata": {"type": pets.item_type}, "Title": "A"}
+    )
+    batch.merge(
+        f"{pets.path}/items(7)",
+        {"__metadata": {"type": pets.item_type}, "Title": "B"},
+    )
+    for res in batch.send():
         if not res.ok:
             print(res.status, res.error)
+    ```
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlsplit
 
 from sppyte.errors import ConfigurationError, ResponseFormatError, SharePointErrorDetails, parse_sharepoint_error
+from sppyte.odata import JSON_NOMETADATA, JSON_VERBOSE
 
 if TYPE_CHECKING:
     from sppyte.odata import Params
@@ -41,8 +43,7 @@ if TYPE_CHECKING:
 
 CRLF = "\r\n"
 WRITE_METHODS = frozenset({"POST", "PATCH", "MERGE", "DELETE"})
-JSON_NOMETADATA = "application/json;odata=nometadata"
-JSON_VERBOSE = "application/json;odata=verbose"
+"""Methods that are grouped into changesets."""
 HTTP_OK_MIN = 200
 HTTP_OK_MAX = 299
 
@@ -53,7 +54,14 @@ _STATUS_RE = re.compile(r"^HTTP/\d(?:\.\d)?\s+(\d{3})")
 
 @dataclass
 class BatchRequest:
-    """One sub-request of a ``$batch`` call, with its URL already resolved."""
+    """One sub-request of a `$batch` call, with its URL already resolved.
+
+    Attributes:
+        method: Upper-cased HTTP method.
+        url: Absolute URL of the sub-request.
+        headers: Extra headers; defaults are added when the part is encoded.
+        body: Serialised body, or `None`.
+    """
 
     method: str
     url: str
@@ -63,18 +71,23 @@ class BatchRequest:
 
 @dataclass
 class BatchResponse:
-    """Response to one `BatchRequest`, in request order."""
+    """Response to one `BatchRequest`, in request order.
+
+    Attributes:
+        status: HTTP status of the part.
+        headers: Response headers with lower-cased names.
+        body: Raw body text.
+        json: Parsed body when the part is JSON and parses; otherwise `None`.
+    """
 
     status: int
     headers: dict[str, str]
-    """Header names lower-cased."""
     body: str
     json: Any = None
-    """Parsed body when the part is JSON and parses; otherwise None."""
 
     @property
     def ok(self) -> bool:
-        """True for a 2xx status."""
+        """Whether the part has a 2xx status."""
         return HTTP_OK_MIN <= self.status <= HTTP_OK_MAX
 
     @property
@@ -84,12 +97,14 @@ class BatchResponse:
 
 
 class Batch:
-    """
-    Collects sub-requests and sends them as one ``/_api/$batch`` call.
+    """Collects sub-requests and sends them as one `/_api/$batch` call.
 
-    Obtain one from `Site.batch()`. Paths are site-relative (``_api/...``) or
-    absolute URLs on the site's host; query options go in ``params``. Methods
-    return the batch so calls can be chained.
+    Obtain one from `Site.batch()`. Paths are site-relative (`_api/...`) or
+    absolute URLs on the site's host; query options go in `params`. Builder
+    methods return the batch so calls can be chained.
+
+    Args:
+        site: The site to send the batch to.
     """
 
     def __init__(self, site: Site):
@@ -113,11 +128,26 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """
-        Queue a sub-request. `json` is serialised for you; `body` is sent as-is
-        (pass one or the other). Default headers: ``Accept: application/json;odata=nometadata``,
-        ``Content-Type: application/json;odata=verbose`` when there is a body, and
-        ``If-Match: *`` for ``PATCH`` / ``MERGE`` / ``DELETE``; `headers` override them.
+        """Queue a sub-request.
+
+        Default headers are `Accept: application/json;odata=nometadata`,
+        `Content-Type: application/json;odata=verbose` when there is a body, and
+        `If-Match: *` for `PATCH` / `MERGE` / `DELETE`; `headers` override them.
+
+        Args:
+            method: HTTP method (`GET`, `POST`, `MERGE`, `PATCH` or `DELETE`).
+            path: Site-relative REST path (`_api/...`) or an absolute URL on the site's host.
+            params: OData query options appended to the URL.
+            json: JSON body, serialised for you.
+            body: Pre-serialised body, sent as-is. Pass either `json` or `body`.
+            headers: Extra headers for this sub-request.
+
+        Returns:
+            This batch, so calls can be chained.
+
+        Raises:
+            ValueError: if both `json` and `body` are given.
+            ConfigurationError: if an absolute `path` is not on the site's host.
         """
         if json is not None and body is not None:
             msg = "pass either json or body, not both"
@@ -128,7 +158,7 @@ class Batch:
         return self
 
     def get(self, path: str, *, params: Params = None, headers: Mapping[str, str] | None = None) -> Batch:
-        """Queue a ``GET``."""
+        """Queue a `GET`; see `add` for the arguments."""
         return self.add("GET", path, params=params, headers=headers)
 
     def post(
@@ -140,7 +170,7 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """Queue a ``POST`` (create, or any action endpoint)."""
+        """Queue a `POST` (create, or any action endpoint); see `add` for the arguments."""
         return self.add("POST", path, params=params, json=json, body=body, headers=headers)
 
     def merge(
@@ -152,7 +182,7 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """Queue a ``MERGE`` (partial update; omitted fields are untouched)."""
+        """Queue a `MERGE` (partial update; omitted fields are untouched); see `add`."""
         return self.add("MERGE", path, params=params, json=json, body=body, headers=headers)
 
     def patch(
@@ -164,22 +194,30 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """Queue a ``PATCH`` (equivalent to ``MERGE`` on SharePoint)."""
+        """Queue a `PATCH` (equivalent to `MERGE` on SharePoint); see `add`."""
         return self.add("PATCH", path, params=params, json=json, body=body, headers=headers)
 
     def delete(self, path: str, *, params: Params = None, headers: Mapping[str, str] | None = None) -> Batch:
-        """Queue a ``DELETE``."""
+        """Queue a `DELETE`; see `add` for the arguments."""
         return self.add("DELETE", path, params=params, headers=headers)
 
     # ---------------------------------------------------------------- send ----
     def send(self, *, digest: str | None = None, **kwargs: Any) -> list[BatchResponse]:
-        """
-        Send the queued requests in one ``POST /_api/$batch``.
+        """Send the queued requests in one `POST /_api/$batch`.
 
-        Returns one `BatchResponse` per request, in order. The batch itself
-        raising (`AuthError`, `SharePointError`) means the whole call failed;
-        a failed sub-request is reported through its own `BatchResponse.ok`.
-        An empty batch returns ``[]`` without a request.
+        The batch itself raising (`AuthError`, `SharePointError`) means the
+        whole call failed; a failed sub-request is reported through its own
+        `BatchResponse.ok`. An empty batch returns `[]` without a request.
+
+        Args:
+            digest: Form digest to send instead of the managed one.
+            **kwargs: Passed to `Site.request` (e.g. `timeout`).
+
+        Returns:
+            One `BatchResponse` per request, in order.
+
+        Raises:
+            ResponseFormatError: if the response is not multipart or the part count differs.
         """
         if not self.requests:
             return []
@@ -201,6 +239,7 @@ class Batch:
 
     # ------------------------------------------------------------- helpers ----
     def _resolve(self, path: str, params: Params) -> str:
+        """Turn a site-relative path or same-host URL into the absolute sub-request URL."""
         if _SCHEME_RE.match(path):
             wanted = urlsplit(self.site.host)
             got = urlsplit(path)
@@ -218,12 +257,12 @@ class Batch:
 
 # ------------------------------------------------------------- encoding ----
 def new_boundary(prefix: str) -> str:
-    """A unique multipart boundary, e.g. ``batch_<uuid>``."""
+    """Return a unique multipart boundary, e.g. `batch_<uuid>`."""
     return f"{prefix}_{uuid.uuid4()}"
 
 
 def _http_part(req: BatchRequest) -> str:
-    """One ``application/http`` part containing a single sub-request."""
+    """Encode one `application/http` part containing a single sub-request."""
     headers: dict[str, str] = {"Accept": JSON_NOMETADATA}
     if req.body is not None:
         headers["Content-Type"] = JSON_VERBOSE
@@ -246,10 +285,11 @@ def _http_part(req: BatchRequest) -> str:
 
 
 def build_batch_body(requests: list[BatchRequest], boundary: str) -> str:
-    """
-    Build the multipart body for ``/_api/$batch``. Reads are individual parts;
-    each run of consecutive writes is wrapped in one changeset, as OData
-    requires. Order is preserved so responses can be matched to requests.
+    """Build the multipart body for `/_api/$batch`.
+
+    Reads are individual parts; each run of consecutive writes is wrapped in
+    one changeset, as OData requires. Order is preserved so responses can be
+    matched to requests.
     """
     parts: list[str] = []
     i = 0
@@ -274,7 +314,7 @@ def build_batch_body(requests: list[BatchRequest], boundary: str) -> str:
 
 # ------------------------------------------------------------- decoding ----
 def multipart_boundary(content_type: str | None) -> str | None:
-    """Extract ``boundary=...`` from a multipart ``Content-Type`` header."""
+    """Extract `boundary=...` from a multipart `Content-Type` header, or `None`."""
     if not content_type:
         return None
     match = _BOUNDARY_RE.search(content_type)
@@ -282,6 +322,7 @@ def multipart_boundary(content_type: str | None) -> str | None:
 
 
 def _split_head_body(text: str) -> tuple[str, str]:
+    """Split a part at its first blank line into (headers, body)."""
     idx = text.find("\n\n")
     if idx == -1:
         return text, ""
@@ -289,6 +330,7 @@ def _split_head_body(text: str) -> tuple[str, str]:
 
 
 def _parse_headers(block: str) -> dict[str, str]:
+    """Parse `Name: value` lines into a dict with lower-cased names."""
     out: dict[str, str] = {}
     for line in block.split("\n"):
         i = line.find(":")
@@ -298,6 +340,7 @@ def _parse_headers(block: str) -> dict[str, str]:
 
 
 def _parse_http_part(text: str) -> BatchResponse:
+    """Parse one `application/http` response part."""
     head, raw_body = _split_head_body(text)
     status_line, _, header_block = head.partition("\n")
     match = _STATUS_RE.match(status_line)
@@ -313,6 +356,7 @@ def _parse_http_part(text: str) -> BatchResponse:
 
 
 def _parse_multipart(text: str, boundary: str) -> list[BatchResponse]:
+    """Parse a multipart body (LF line endings), descending into changesets."""
     results: list[BatchResponse] = []
     delimiter = f"--{boundary}"
     # segments[0] is the preamble; the last is the epilogue after "--".
@@ -333,10 +377,12 @@ def _parse_multipart(text: str, boundary: str) -> list[BatchResponse]:
 
 
 def parse_batch_response(body: str, content_type: str | None) -> list[BatchResponse]:
-    """
-    Parse a ``$batch`` response body into one `BatchResponse` per sub-request,
-    flattening changeset responses, in order. Raises `ResponseFormatError`
-    if the response is not ``multipart/mixed``.
+    """Parse a `$batch` response body into one `BatchResponse` per sub-request.
+
+    Changeset responses are flattened; order is preserved.
+
+    Raises:
+        ResponseFormatError: if the response is not `multipart/mixed`.
     """
     boundary = multipart_boundary(content_type)
     if not boundary:

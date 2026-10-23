@@ -4,37 +4,69 @@ on:
   release:
     types: [published]
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
 
+env:
+  HATCH_VERSION: "1.14.1"
+
+jobs:
+  verify:
+    name: Lint, type check and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "hatch==${HATCH_VERSION}"
+      - run: hatch fmt --check
+      - run: hatch run types:check
+      - run: hatch test
+
+  build:
+    name: Build distribution
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "hatch==${HATCH_VERSION}"
+      - name: Check the release tag matches the package version
+        run: |
+          version="$(hatch version)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Package version $version does not match release tag $GITHUB_REF_NAME"
+            exit 1
+          fi
+      - run: hatch build
+      - run: |
+          pip install twine
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
     environment:
       name: release
-
+      url: https://pypi.org/project/sppyte/
     permissions:
-      id-token: write
-      contents: read
-
+      id-token: write  # trusted publishing
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install Hatch
-        run: |
-          python -m pip install --upgrade pip
-          pip install hatch
-
-      - name: Build package
-        run: hatch build
-
-      - name: Run tests with Hatch
-        run: hatch test
-
+          name: dist
+          path: dist/
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

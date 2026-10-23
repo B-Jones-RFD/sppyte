@@ -5,31 +5,67 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so local `hatch fmt` (which generates ruff_defaults.toml) and CI agree.
+  HATCH_VERSION: "1.14.1"
 
 jobs:
   lint-and-test:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: Install Hatch
-        run: pip install hatch
+        run: pip install "hatch==${HATCH_VERSION}"
 
-      - name: Run linting with Hatch
-        run: hatch fmt
+      - name: Lint and format check
+        run: hatch fmt --check
 
-      - name: Run tests with Hatch
+      - name: Type check
+        run: hatch run types:check
+
+      - name: Test
         run: hatch test
 
-      - name: Run type checking with Hatch
-        run: hatch run types:check
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "hatch==${HATCH_VERSION}"
+      - run: hatch build
+      - name: Check the built distributions
+        run: |
+          pip install twine
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

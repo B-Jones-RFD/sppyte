@@ -1,22 +1,18 @@
-"""
-sppyte.errors
-~~~~~~~~~~~~~
+"""Exceptions raised by sppyte.
 
-Exceptions raised by sppyte.
-
-Hierarchy::
+Hierarchy:
 
     SppyteError
-    ├── ConfigurationError (also a ValueError)
-    ├── SessionError
+    ├── ConfigurationError  (also a ValueError)
+    ├── SessionError        (kept for compatibility; no longer raised)
     ├── ResponseFormatError
-    └── SharePointError (also a requests.HTTPError)
+    └── SharePointError     (also a requests.HTTPError)
         └── AuthError
 
 `SharePointError` carries the parsed SharePoint error body, so a failed call
-reads ``HTTP 400: Column 'Foo' does not exist`` instead of
-``400 Client Error: Bad Request for url: ...``. Because it subclasses
-`requests.HTTPError`, existing ``except HTTPError`` handlers keep working.
+reads `HTTP 400: Column 'Foo' does not exist` instead of
+`400 Client Error: Bad Request for url: ...`. Because it subclasses
+`requests.HTTPError`, existing `except HTTPError` handlers keep working.
 """
 
 from __future__ import annotations
@@ -43,7 +39,11 @@ class ConfigurationError(SppyteError, ValueError):
 
 
 class SessionError(SppyteError):
-    """Raised when an HTTP session is not connected/available."""
+    """Raised when an HTTP session is not available.
+
+    Kept for compatibility with 0.x; sessions are now created on demand, so
+    this is no longer raised.
+    """
 
 
 class ResponseFormatError(SppyteError):
@@ -55,20 +55,19 @@ class SharePointErrorDetails:
     """The `error` object SharePoint returns in a failed response body."""
 
     code: str | None = None
-    """SharePoint error code, e.g. ``-2130575338, Microsoft.SharePoint.SPException``."""
+    """SharePoint error code, e.g. `-2130575338, Microsoft.SharePoint.SPException`."""
     message: str | None = None
     """Human-readable message from SharePoint."""
 
 
 class SharePointError(SppyteError, HTTPError):
-    """
-    Raised when SharePoint answers with a non-2xx status.
+    """Raised when SharePoint answers with a non-2xx status.
 
     Attributes:
         status: HTTP status code.
         code: SharePoint error code from the response body, if present.
         message: SharePoint error message from the response body, if present.
-        retry_after: Seconds the server asked clients to wait (``Retry-After``), if sent.
+        retry_after: Seconds the server asked clients to wait (`Retry-After`), if sent.
         response: The underlying `requests.Response` (inherited from `HTTPError`).
     """
 
@@ -103,13 +102,14 @@ def raise_for_status(response: Response) -> None:
 
 
 def parse_sharepoint_error(body: Any) -> SharePointErrorDetails | None:
-    """
-    Extract SharePoint's error object from a response body.
+    """Extract SharePoint's error object from a response body.
 
-    Handles both the ``odata=verbose`` shape
-    (``{"error": {"code": ..., "message": {"value": ...}}}``) and the
-    ``odata=nometadata`` / ``minimalmetadata`` shape (``{"odata.error": ...}``).
-    Returns None for anything else.
+    Handles both the `odata=verbose` shape
+    (`{"error": {"code": ..., "message": {"value": ...}}}`) and the
+    `odata=nometadata` / `minimalmetadata` shape (`{"odata.error": ...}`).
+
+    Returns:
+        The parsed details, or `None` when the body is not a SharePoint error.
     """
     if not isinstance(body, str) or not body:
         return None
@@ -134,10 +134,14 @@ def parse_sharepoint_error(body: Any) -> SharePointErrorDetails | None:
 
 
 def parse_retry_after(value: str | None, now: datetime | None = None) -> float | None:
-    """
-    Parse a ``Retry-After`` header: either delay-seconds or an HTTP date.
+    """Parse a `Retry-After` header given as delay-seconds or an HTTP date.
 
-    Returns seconds (never negative), or None when absent or invalid.
+    Args:
+        value: The raw header value, or `None` if absent.
+        now: Reference time for HTTP dates; defaults to the current UTC time.
+
+    Returns:
+        Seconds to wait (never negative), or `None` when absent or invalid.
     """
     if value is None:
         return None

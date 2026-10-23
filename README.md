@@ -10,6 +10,8 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
 
 > ⚠️ This client uses **NTLM** (`requests-ntlm`) and is for **SharePoint on-premises** (2013, 2016, 2019, Subscription Edition). SharePoint Online does not accept NTLM.
 
+Full documentation, including the API reference, is at **<https://b-jones-rfd.github.io/sppyte/>**.
+
 ## Table of Contents
 
 - [Features](#features)

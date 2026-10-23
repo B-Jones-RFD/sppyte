@@ -1,5 +1,9 @@
+import importlib
+import sys
+
 import pytest
 
+from sppyte import Library, List, Site
 from sppyte.errors import ResponseFormatError
 from sppyte.odata import Page, follow_pages, parse_page
 from sppyte.utils import (
@@ -125,38 +129,47 @@ def test_parse_item_type_allows_empty_string():
     assert parse_item_type(r) == ""
 
 
-# ------------------------- parse_add_item -----------------------------
+# ------------------------- parse_add_item (deprecated) ----------------
 @pytest.mark.parametrize("value", [0, 1, 42, 9999])
 def test_parse_add_item_ok_values(value):
-    r = {"ID": value}
-    assert parse_add_item(r) == value
+    with pytest.warns(DeprecationWarning, match="parse_created_item"):
+        assert parse_add_item({"ID": value}) == value
 
 
 def test_parse_add_item_missing_raises():
-    with pytest.raises(Exception, match="Item id"):
+    with pytest.warns(DeprecationWarning), pytest.raises(Exception, match="Item id"):
         parse_add_item({})
 
 
 def test_parse_add_item_negative_sentinel_raises():
     # Implementation uses -1 sentinel to detect missing/invalid ID
-    with pytest.raises(Exception, match="Item id"):
+    with pytest.warns(DeprecationWarning), pytest.raises(Exception, match="Item id"):
         parse_add_item({"ID": -1})
 
 
-# ------------------------- parse_add_document -------------------------
+# ------------------------- parse_add_document (deprecated) ------------
 def test_parse_add_document_ok():
-    r = {"UniqueId": "f0e1d2c3-b4a5-6789-abcd-ef0011223344"}
-    assert parse_add_document(r) == "f0e1d2c3-b4a5-6789-abcd-ef0011223344"
+    with pytest.warns(DeprecationWarning, match="parse_object"):
+        assert parse_add_document({"UniqueId": "f0e1d2c3"}) == "f0e1d2c3"
 
 
 def test_parse_add_document_missing_raises():
-    with pytest.raises(Exception, match="Document id"):
+    with pytest.warns(DeprecationWarning), pytest.raises(Exception, match="Document id"):
         parse_add_document({})
 
 
 def test_parse_add_document_allows_empty_string():
-    r = {"UniqueId": ""}
-    assert parse_add_document(r) == ""
+    with pytest.warns(DeprecationWarning):
+        assert parse_add_document({"UniqueId": ""}) == ""
+
+
+def test_models_shim_warns():
+    sys.modules.pop("sppyte.models", None)
+    with pytest.warns(DeprecationWarning, match="sppyte.models is deprecated"):
+        models = importlib.import_module("sppyte.models")
+    assert models.Site is Site
+    assert models.List is List
+    assert models.Library is Library
 
 
 # ------------------------- parse_context_info ---------------------------

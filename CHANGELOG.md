@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0b2] - 2026-10-23
+
+### Changed
+
+- Importing `sppyte.models` and calling `utils.parse_add_item` / `parse_add_document` now emit
+  `DeprecationWarning`.
+- All docstrings follow Google style (PEP 257), enforced by ruff's `pydocstyle` rules; `mypy`
+  requires fully typed definitions in `sppyte`.
+
+### Added
+
+- Documentation site built with MkDocs (`hatch run docs:serve`), published to GitHub Pages.
+- `Site.__exit__` is fully typed; `JSON_NOMETADATA` / `JSON_VERBOSE` constants in `sppyte.odata`.
+- CI: `hatch fmt --check` (CI no longer silently reformats), `fail-fast: false`, least-privilege
+  `permissions`, concurrency cancellation, pinned hatch, a build + `twine check` job; the publish
+  workflow verifies the release tag matches the package version and lints/type-checks/tests
+  before building; Dependabot for GitHub Actions and pip.
+
 ## [1.0.0b1] - 2026-10-23
 
 First beta: the planned 1.0 feature set is complete.
@@ -118,7 +136,8 @@ First beta: the planned 1.0 feature set is complete.
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b1...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b2...HEAD
+[1.0.0b2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b1...v1.0.0b2
 [1.0.0b1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...v1.0.0b1
 [1.0.0a3]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...v1.0.0a3
 [1.0.0a2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...v1.0.0a2

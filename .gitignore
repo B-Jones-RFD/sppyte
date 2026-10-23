@@ -35,3 +35,6 @@ env/
 
 # Various caches
 .*_cache/
+
+# mkdocs output
+site/

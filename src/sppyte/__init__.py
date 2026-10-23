@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""
-Sppyte — a tiny helper around SharePoint REST endpoints using requests + NTLM.
+"""Sppyte: a tiny helper around SharePoint REST endpoints using requests + NTLM.
 
-It purposefully keeps a thin, explicit mapping to REST calls so behavior
-remains transparent and easy to debug.
+It purposefully keeps a thin, explicit mapping to REST calls so behaviour
+remains transparent and easy to debug. Start with `Site`.
 """
 
 from sppyte.__about__ import __version__

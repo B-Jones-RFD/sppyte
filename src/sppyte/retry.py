@@ -1,14 +1,10 @@
-"""
-sppyte.retry
-~~~~~~~~~~~~
+"""Opt-in retry of transient failures for read requests.
 
-Opt-in retry of transient failures for read requests.
-
-Enable with ``Site(..., retry=True)`` or ``Site(..., retry=RetryOptions(...))``.
-Reads (``GET`` requests and CAML `List.query`) are retried; writes never are.
-Delays use exponential backoff with full jitter —
-``random(0, min(max_delay, base_delay * 2**attempt))`` — unless the server
-sent ``Retry-After``, in which case that wait is used as-is; if it exceeds
+Enable with `Site(..., retry=True)` or `Site(..., retry=RetryOptions(...))`.
+Reads (`GET` requests and CAML `List.query`) are retried; writes never are.
+Delays use exponential backoff with full jitter,
+`random(0, min(max_delay, base_delay * 2**attempt))`, unless the server sent
+`Retry-After`, in which case that wait is used as-is; if it exceeds
 `RetryOptions.max_delay` retrying stops and the error propagates.
 """
 
@@ -36,9 +32,10 @@ _random = random.SystemRandom()
 
 
 def is_transient(exc: BaseException) -> bool:
-    """
-    Default `RetryOptions.retry_on`: connection failures, timeouts, and
-    `SharePointError` with status 429, 502, 503 or 504.
+    """Return whether an exception is worth retrying.
+
+    This is the default `RetryOptions.retry_on`: connection failures, timeouts,
+    and `SharePointError` with status 429, 502, 503 or 504.
     """
     if isinstance(exc, SharePointError):
         return exc.status in RETRYABLE_STATUSES
@@ -54,18 +51,26 @@ class RetryOptions:
     base_delay: float = 0.2
     """Base delay in seconds; doubles each attempt."""
     max_delay: float = 5.0
-    """Upper bound on one delay, including a server-requested ``Retry-After``."""
+    """Upper bound on one delay, including a server-requested `Retry-After`."""
     retry_on: Callable[[BaseException, int], bool] | None = None
-    """
-    Decide whether a failed attempt should be retried; receives the exception
-    and the 1-based attempt number. Defaults to `is_transient`.
+    """Decides whether a failed attempt is retried.
+
+    Receives the exception and the 1-based attempt number. Defaults to `is_transient`.
     """
 
 
 def with_retry(options: RetryOptions | None, attempt: Callable[[], T]) -> T:
-    """
-    Run `attempt`; on a retryable exception, wait and run it again, up to
-    `options.retries` more times. Re-raises the last exception.
+    """Run `attempt`, retrying on transient failure according to `options`.
+
+    Args:
+        options: The retry policy; `None` runs `attempt` exactly once.
+        attempt: The operation to run.
+
+    Returns:
+        The result of the first successful attempt.
+
+    Raises:
+        Exception: the last failure, once retries are exhausted or the failure is not retryable.
     """
     if options is None:
         return attempt()

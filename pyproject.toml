@@ -24,7 +24,8 @@ classifiers = [
 dependencies = ["requests-ntlm"]
 
 [project.urls]
-Documentation = "https://github.com/B-Jones-RFD/sppyte#readme"
+Documentation = "https://b-jones-rfd.github.io/sppyte/"
+Changelog = "https://github.com/B-Jones-RFD/sppyte/blob/main/CHANGELOG.md"
 Issues = "https://github.com/B-Jones-RFD/sppyte/issues"
 Source = "https://github.com/B-Jones-RFD/sppyte"
 
@@ -45,10 +46,43 @@ dependencies = ["ruff==0.4.5"]
 [tool.ruff]
 extend = "ruff_defaults.toml"
 
+[tool.ruff.lint]
+# Docstrings: Google style (PEP 257 compliant), on top of hatch's defaults.
+extend-select = ["D"]
+extend-ignore = [
+  "D105", # magic methods need no docstring
+  "D107", # __init__ is documented in the class docstring (Args:)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.hatch.envs.docs]
+dependencies = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.25"]
+[tool.hatch.envs.docs.scripts]
+build = "mkdocs build --strict"
+serve = "mkdocs serve"
+
 [tool.hatch.envs.types]
 extra-dependencies = ["mypy>=1.0.0"]
 [tool.hatch.envs.types.scripts]
 check = "mypy --ignore-missing-imports --install-types --non-interactive {args:src/sppyte tests}"
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "sppyte.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_return_any = false
 
 [tool.coverage.run]
 source_pkgs = ["sppyte", "tests"]
@@ -64,7 +98,6 @@ tests = ["tests", "*/sppyte/tests"]
 exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
 
 [tool.pytest.ini_options]
-testpaths = [
-    "tests",
-]
+testpaths = ["tests"]
 pythonpath = ["src"]
+filterwarnings = ["error::DeprecationWarning:sppyte"]

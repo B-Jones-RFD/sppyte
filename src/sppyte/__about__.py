@@ -1,4 +1,6 @@
 # SPDX-FileCopyrightText: 2025-present B-Jones-RFD
 #
 # SPDX-License-Identifier: MIT
-__version__ = "1.0.0b1"
+"""Package version, read by hatch and exposed as `sppyte.__version__`."""
+
+__version__ = "1.0.0b2"
