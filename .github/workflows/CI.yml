@@ -14,9 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Pinned so local `hatch fmt` (which generates ruff_defaults.toml) and CI agree.
-  HATCH_VERSION: "1.14.1"
 
 jobs:
   lint-and-test:
@@ -38,7 +35,7 @@ jobs:
           cache: pip
 
       - name: Install Hatch
-        run: pip install "hatch==${HATCH_VERSION}"
+        run: pip install hatch
 
       - name: Lint and format check
         run: hatch fmt --check
@@ -58,7 +55,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install "hatch==${HATCH_VERSION}"
+      - run: pip install hatch
       - run: hatch build
       - name: Check the built distributions
         run: |

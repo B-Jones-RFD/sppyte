@@ -7,8 +7,6 @@ on:
 permissions:
   contents: read
 
-env:
-  HATCH_VERSION: "1.14.1"
 
 jobs:
   verify:
@@ -20,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install "hatch==${HATCH_VERSION}"
+      - run: pip install hatch
       - run: hatch fmt --check
       - run: hatch run types:check
       - run: hatch test
@@ -35,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install "hatch==${HATCH_VERSION}"
+      - run: pip install hatch
       - name: Check the release tag matches the package version
         run: |
           version="$(hatch version)"

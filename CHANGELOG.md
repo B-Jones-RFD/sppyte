@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation site built with MkDocs (`hatch run docs:serve`), published to GitHub Pages.
 - `Site.__exit__` is fully typed; `JSON_NOMETADATA` / `JSON_VERBOSE` constants in `sppyte.odata`.
 - CI: `hatch fmt --check` (CI no longer silently reformats), `fail-fast: false`, least-privilege
-  `permissions`, concurrency cancellation, pinned hatch, a build + `twine check` job; the publish
+  `permissions`, concurrency cancellation, a build + `twine check` job; the publish
   workflow verifies the release tag matches the package version and lints/type-checks/tests
   before building; Dependabot for GitHub Actions and pip.
 
