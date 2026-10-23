@@ -89,7 +89,7 @@ class SharePointError(SppyteError, HTTPError):
 
 
 class AuthError(SharePointError):
-    """Raised for 401/403: bad credentials, NTLM rejected, or an expired/missing request digest."""
+    """Raised for 401/403: bad credentials, a rejected handshake, or an expired/missing request digest."""
 
 
 def raise_for_status(response: Response) -> None:

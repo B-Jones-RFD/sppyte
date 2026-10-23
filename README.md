@@ -152,7 +152,7 @@ A `Site` owns the HTTP session. Use it as a context manager to connect eagerly (
 ```py
 site = Site(HOST, SITE, USER, PASS)
 try:
-    site.connect()   # optional: NTLM handshake + first form digest now, not on first use
+    site.connect()   # optional: authenticate + fetch the first form digest now, not on first use
     ...
 finally:
     site.close()
@@ -332,7 +332,7 @@ site = Site(..., retry=RetryOptions(retry_on=lambda exc, n: is_transient(exc) an
 - `timeout` (default `30.0` seconds) applies to every request and can be a `(connect, read)` tuple. Pass `timeout=None` to disable (not recommended). Individual calls to `site.request(...)` can override it.
 - `verify` is forwarded to `requests`: `False` to skip TLS verification, or a path to a CA bundle for an internal certificate authority — no more `REQUESTS_CA_BUNDLE` hacks.
 - `cert` is forwarded to `requests` for client certificates.
-- `session` lets you supply your own `requests.Session` (proxies, adapters, retries). Sppyte adds NTLM auth to it only if it has no `auth`, and never closes it.
+- `session` lets you supply your own `requests.Session` (proxies, adapters, retries). sppyte attaches its `SpPremAuth` handler only if the session has no `auth`, and never closes it.
 
 ```py
 site = Site(HOST, SITE, USER, PASS, verify="/etc/pki/corp-root-ca.pem", timeout=(5, 120))

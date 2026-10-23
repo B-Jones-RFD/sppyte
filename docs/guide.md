@@ -113,7 +113,7 @@ Off by default. `Site(..., retry=True)` retries **reads** — `GET` requests and
 
 - `timeout` (default 30 s) applies to every request; a `(connect, read)` tuple is accepted; `None` disables it.
 - `verify` and `cert` are forwarded to `requests` (internal CA bundles, client certificates).
-- `session` lets you supply your own `requests.Session` (proxies, adapters). sppyte adds NTLM auth to it only if it has no `auth`, and never closes it.
+- `session` lets you supply your own `requests.Session` (proxies, adapters). sppyte attaches its `SpPremAuth` handler only if the session has no `auth`, and never closes it.
 
 ## Special characters
 

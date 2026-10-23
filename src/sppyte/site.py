@@ -1,4 +1,4 @@
-"""`Site`: the NTLM session and managed request digest for one SharePoint site."""
+"""`Site`: the authenticated session and managed request digest for one SharePoint site."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 class Site:
     """A connection to one SharePoint site.
 
-    - Lazily establishes an NTLM-authenticated `requests.Session` on first use.
+    - Lazily establishes an authenticated `requests.Session` (NTLM or Kerberos) on first use.
     - Obtains, caches and refreshes the form digest required for write operations.
     - Hands out `List` and `Library` helpers bound to this site.
 
@@ -73,7 +73,7 @@ class Site:
         cert: Client certificate (path or `(cert, key)` tuple). Forwarded to
             `requests.Session.cert`.
         session: Pre-configured `requests.Session` to use instead of creating one. sppyte
-            sets NTLM auth on it only if it has no `auth`, and does not close it.
+            attaches its `SpPremAuth` handler only if it has no `auth`, and does not close it.
         retry: Retry transient failures on reads (`GET` requests and CAML queries).
             `True` for the defaults, a `RetryOptions` to tune, `None` (default) for off.
             Writes are never retried. See `sppyte.retry`.
@@ -177,7 +177,7 @@ class Site:
         return session
 
     def connect(self) -> None:
-        """Create the NTLM-authenticated session and fetch a form digest eagerly."""
+        """Create the authenticated session and fetch a form digest eagerly."""
         self._ensure_session()
         self.digest(refresh=True)
 
