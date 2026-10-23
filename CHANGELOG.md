@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-23
+
+### Changed
+
+- Authentication is now handled by sppyte's own `SpPremAuth` (`sppyte.auth`), built directly on
+  [pyspnego](https://pypi.org/project/pyspnego/). `requests-ntlm`, unmaintained since 2024, is no
+  longer a dependency; runtime dependencies are `requests`, `pyspnego` and `cryptography`.
+  Behaviour for existing NTLM users is unchanged.
+- `Site.username` / `password` are optional (defaults `None`); `Site.principal` is `None` for
+  single sign-on or a custom `auth`.
+
+### Added
+
+- Kerberos / Negotiate: `Site(..., protocol="negotiate")` (or `"kerberos"`), with or without
+  credentials; single sign-on uses SSPI on Windows or the current ticket elsewhere.
+  `pip install "sppyte[kerberos]"` adds the GSSAPI bindings for Linux/macOS.
+- `Site(auth=...)` accepts any `requests.auth.AuthBase`.
+- TLS channel bindings (`tls-server-end-point`) are sent over HTTPS for servers with Extended
+  Protection (`SpPremAuth(send_cbt=False)` to disable).
+- Handshake tests against an in-process fake NTLM server (`tests/fake_ntlm.py`).
+
 ## [1.0.0] - 2026-10-23
 
 First stable release. Identical in code to 1.0.0b2, which was verified against an on-premises
@@ -146,7 +167,8 @@ First beta: the planned 1.0 feature set is complete.
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b2...v1.0.0
 [1.0.0b2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b1...v1.0.0b2
 [1.0.0b1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...v1.0.0b1

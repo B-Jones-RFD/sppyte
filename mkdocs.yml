@@ -30,6 +30,7 @@ nav:
   - Guide: guide.md
   - API reference:
       - Site: api/site.md
+      - Authentication: api/auth.md
       - List: api/lists.md
       - Library: api/libraries.md
       - Batch: api/batch.md

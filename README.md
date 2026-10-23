@@ -6,9 +6,9 @@
 
 # Sppyte
 
-A tiny, explicit Python helper for working with a SharePoint site through the legacy **SharePoint REST** endpoints with **NTLM** authentication. Sppyte[^1] keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
+A tiny, explicit Python helper for working with a SharePoint site through the legacy **SharePoint REST** endpoints with **NTLM** or **Kerberos** (Negotiate) authentication. Sppyte[^1] keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
 
-> ⚠️ This client uses **NTLM** (`requests-ntlm`) and is for **SharePoint on-premises** (2013, 2016, 2019, Subscription Edition). SharePoint Online does not accept NTLM.
+> ⚠️ This client is for **SharePoint on-premises** (2013, 2016, 2019, Subscription Edition). SharePoint Online does not accept NTLM or Kerberos.
 
 Full documentation, including the API reference, is at **<https://b-jones-rfd.github.io/sppyte/>**.
 
@@ -19,6 +19,7 @@ Full documentation, including the API reference, is at **<https://b-jones-rfd.gi
 - [Quickstart](#quickstart)
 - [Usage](#usage)
   - [Connecting](#connecting)
+  - [Authentication](#authentication)
   - [Write operations and the request digest](#write-operations-and-the-request-digest)
   - [Paging](#paging)
   - [CAML queries and the 5,000-item threshold](#caml-queries-and-the-5000-item-threshold)
@@ -39,7 +40,7 @@ Full documentation, including the API reference, is at **<https://b-jones-rfd.gi
 
 ## Features
 
-- `Site` connection with NTLM auth, lazy session creation and a **managed form digest** (fetched, cached, refreshed before expiry, and retried once if SharePoint rejects it).
+- `Site` connection with NTLM or Kerberos single sign-on (via [pyspnego](https://pypi.org/project/pyspnego/)), lazy session creation and a **managed form digest** (fetched, cached, refreshed before expiry, and retried once if SharePoint rejects it).
 - `List` helper to:
   - Add / update / delete items
   - Iterate every item across pages (`iter_items`, `get_all_items`)
@@ -61,6 +62,14 @@ Full documentation, including the API reference, is at **<https://b-jones-rfd.gi
 ```console
 pip install sppyte
 ```
+
+For Kerberos on Linux or macOS, install the system GSSAPI libraries (`libkrb5-dev` / `krb5`) and the extra:
+
+```console
+pip install "sppyte[kerberos]"
+```
+
+Windows uses the built-in SSPI; nothing extra is needed.
 
 ## Quickstart
 
@@ -130,7 +139,7 @@ with Site(HOST, SITE, USER, PASS, domain="CONTOSO") as site:
 
 ### Connecting
 
-`Site(host, site_relative_url, username, password, *, domain=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)`
+`Site(host, site_relative_url, username=None, password=None, *, domain=None, protocol="ntlm", auth=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)`
 
 - `host` is scheme and host only: `"https://sharepoint.example.com"`.
 - `site_relative_url` is the server-relative URL of the site (web): `"/sites/parrots"`, or `""` / `"/"` for the root site.
@@ -150,6 +159,22 @@ finally:
 ```
 
 `site.list(name)` and `site.library(name)` return lightweight helpers bound to the site. They hold no resources of their own.
+
+### Authentication
+
+sppyte speaks NTLM and Negotiate (SPNEGO / Kerberos) through [pyspnego](https://pypi.org/project/pyspnego/). The handshake authenticates the TCP connection, so it runs once per pooled connection and later requests ride on it.
+
+```py
+Site(HOST, SITE, "jsmith", PASSWORD, domain="CONTOSO")                 # NTLM (default)
+Site(HOST, SITE, "jsmith", PASSWORD, domain="CONTOSO", protocol="negotiate")  # Kerberos if possible, else NTLM
+Site(HOST, SITE, protocol="negotiate")                                  # single sign-on with the current user's ticket
+Site(HOST, SITE, auth=my_requests_auth_handler)                         # anything else: any requests AuthBase
+```
+
+- `protocol="ntlm"` requires `username` and `password`.
+- `protocol="negotiate"` / `"kerberos"` work without credentials on a domain-joined machine (SSPI on Windows, a `kinit` ticket elsewhere); pass credentials to authenticate as someone else.
+- Over HTTPS, TLS channel bindings are sent automatically, which servers with Extended Protection require.
+- `sppyte.auth.SpPremAuth` is a plain `requests` auth handler, usable on your own `Session` too.
 
 ### Write operations and the request digest
 
@@ -339,7 +364,7 @@ site.request(
 
 ### Site
 
-#### `Site(host, site_relative_url, username, password, *, domain=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)`
+#### `Site(host, site_relative_url, username=None, password=None, *, domain=None, protocol="ntlm", auth=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)`
 
 See [Connecting](#connecting), [Retrying transient failures](#retrying-transient-failures) and [Timeouts, TLS and proxies](#timeouts-tls-and-proxies). Raises `ConfigurationError` for malformed options.
 
@@ -358,7 +383,7 @@ See [Connecting](#connecting), [Retrying transient failures](#retrying-transient
 | `batch()` | A `Batch` builder; see [Batching requests](#batching-requests). |
 | `form_digest` | The cached digest, or `None`. |
 | `session` | The `requests.Session`, or `None` before first use. |
-| `site_path`, `host`, `relative_url`, `principal` | Normalised connection details (`principal` is `DOMAIN\user`). |
+| `site_path`, `host`, `relative_url`, `principal`, `auth` | Normalised connection details (`principal` is `DOMAIN\user`, or `None` for SSO / custom `auth`). |
 
 ### List
 

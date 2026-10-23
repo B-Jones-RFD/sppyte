@@ -3,8 +3,9 @@
 ## Connecting
 
 ```python
-Site(host, site_relative_url, username, password, *,
-     domain=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)
+Site(host, site_relative_url, username=None, password=None, *,
+     domain=None, protocol="ntlm", auth=None,
+     timeout=30.0, verify=None, cert=None, session=None, retry=None)
 ```
 
 - `host` is scheme and host only: `"https://sharepoint.example.com"`.
@@ -14,6 +15,19 @@ Site(host, site_relative_url, username, password, *,
 Creating a `Site` performs no network I/O; the HTTP session is created on the first request. Malformed options raise [`ConfigurationError`][sppyte.errors.ConfigurationError] immediately instead of surfacing later as an opaque 404.
 
 A `Site` owns the HTTP session. Use it as a context manager to connect eagerly (which also verifies the credentials) and close the session afterwards, or call `connect()` / `close()` yourself. `site.list(name)` and `site.library(name)` return lightweight helpers bound to the site that hold no resources of their own.
+
+## Authentication
+
+sppyte speaks NTLM and Negotiate (SPNEGO / Kerberos) through [pyspnego](https://pypi.org/project/pyspnego/); see [`SpPremAuth`][sppyte.auth.SpPremAuth]. The handshake authenticates the TCP connection, so it runs once per pooled connection.
+
+```python
+Site(HOST, SITE, "jsmith", PASSWORD, domain="CONTOSO")                        # NTLM (default)
+Site(HOST, SITE, "jsmith", PASSWORD, domain="CONTOSO", protocol="negotiate")  # Kerberos if possible
+Site(HOST, SITE, protocol="negotiate")                                        # single sign-on
+Site(HOST, SITE, auth=my_requests_auth_handler)                               # any requests AuthBase
+```
+
+Kerberos on Linux/macOS needs the system GSSAPI libraries and `pip install "sppyte[kerberos]"`; Windows uses SSPI. Over HTTPS, TLS channel bindings are sent automatically for servers with Extended Protection.
 
 ## Write operations and the request digest
 

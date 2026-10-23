@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from requests import Response, Session
-from requests_ntlm import HttpNtlmAuth
 
+from sppyte.auth import Protocol, SpPremAuth
 from sppyte.batch import Batch
 from sppyte.errors import FORBIDDEN, AuthError, ConfigurationError, raise_for_status
 from sppyte.libraries import Library
@@ -22,6 +22,8 @@ from sppyte.utils import parse_context_info
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
+
+    from requests.auth import AuthBase
 
 DIGEST_REFRESH_MARGIN = 60.0
 """Refresh the digest this many seconds before SharePoint says it expires."""
@@ -55,10 +57,15 @@ class Site:
         host: Scheme and host only, e.g. `"https://sharepoint.example.com"`.
         site_relative_url: Server-relative URL of the site (web), e.g. `"/sites/demo"`;
             `""` or `"/"` for the root site.
-        username: Account name without the domain.
-        password: Password for `username`.
+        username: Account name without the domain. Required for NTLM; omit with
+            `protocol="negotiate"` to use the current user's Kerberos ticket.
+        password: Password for `username`; omit for single sign-on.
         domain: NTLM (NetBIOS) domain, e.g. `"CONTOSO"`. Omit for a local account or when
             `username` already contains a domain.
+        protocol: `"ntlm"` (default), `"negotiate"` (Kerberos when a ticket is available,
+            NTLM otherwise) or `"kerberos"`. See `sppyte.auth`.
+        auth: Any `requests` authentication handler to use instead of sppyte's
+            `SpPremAuth`; `username`, `password`, `domain` and `protocol` are then ignored.
         timeout: Per-request timeout in seconds, or a `(connect, read)` tuple. `None`
             disables the timeout (not recommended).
         verify: TLS verification; `False` to disable, or a path to a CA bundle for an
@@ -79,10 +86,12 @@ class Site:
         self,
         host: str,
         site_relative_url: str,
-        username: str,
-        password: str,
+        username: str | None = None,
+        password: str | None = None,
         *,
         domain: str | None = None,
+        protocol: Protocol = "ntlm",
+        auth: AuthBase | None = None,
         timeout: Timeout = DEFAULT_TIMEOUT,
         verify: bool | str | None = None,
         cert: str | tuple[str, str] | None = None,
@@ -91,17 +100,23 @@ class Site:
     ):
         self.host = _validate_host(host)
         self.relative_url = _validate_relative_url(site_relative_url)
-        if not isinstance(username, str) or not username:
-            msg = "username must be a non-empty string"
-            raise ConfigurationError(msg)
-        if not isinstance(password, str):
-            msg = "password must be a string"
-            raise ConfigurationError(msg)
-
         self.site_path = f"{self.host}{self.relative_url}"
         self.username = username
         self.password = password
         self.domain = domain
+        self.protocol: Protocol = protocol
+        if auth is None:
+            if protocol == "ntlm" and (not isinstance(username, str) or not username):
+                msg = "username must be a non-empty string for NTLM; use protocol='negotiate' for single sign-on"
+                raise ConfigurationError(msg)
+            if protocol == "ntlm" and not isinstance(password, str):
+                msg = "password must be a string for NTLM"
+                raise ConfigurationError(msg)
+            try:
+                auth = SpPremAuth(username, password, domain=domain, protocol=protocol)
+            except ValueError as e:
+                raise ConfigurationError(str(e)) from e
+        self.auth: AuthBase = auth
         self.timeout = timeout
         self.verify = verify
         self.cert = cert
@@ -137,9 +152,15 @@ class Site:
 
     # ------------------------------------------------------------ session ----
     @property
-    def principal(self) -> str:
-        r"""The NTLM account name: `DOMAIN\user` when a domain was given, else `username`."""
-        return f"{self.domain}\\{self.username}" if self.domain else self.username
+    def principal(self) -> str | None:
+        r"""The account name sent to the server: `DOMAIN\user` when a domain was given.
+
+        `None` when authenticating with the current user's Kerberos ticket or a
+        custom `auth` handler.
+        """
+        if isinstance(self.auth, SpPremAuth):
+            return self.auth.username
+        return None
 
     def _ensure_session(self) -> Session:
         """Return the session, creating and configuring it on first use."""
@@ -148,7 +169,7 @@ class Site:
             self._owns_session = True
         session = self.session
         if session.auth is None:
-            session.auth = HttpNtlmAuth(self.principal, self.password)
+            session.auth = self.auth
         if self.verify is not None:
             session.verify = self.verify
         if self.cert is not None:

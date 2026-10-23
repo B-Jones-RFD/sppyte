@@ -9,6 +9,7 @@ remains transparent and easy to debug. Start with `Site`.
 """
 
 from sppyte.__about__ import __version__
+from sppyte.auth import SpPremAuth
 from sppyte.batch import Batch, BatchRequest, BatchResponse
 from sppyte.errors import (
     AuthError,
@@ -41,6 +42,7 @@ __all__ = [
     "SharePointError",
     "SharePointErrorDetails",
     "Site",
+    "SpPremAuth",
     "SppyteError",
     "__version__",
     "is_transient",

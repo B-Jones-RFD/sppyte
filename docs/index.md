@@ -1,9 +1,9 @@
 # sppyte
 
-A tiny, explicit Python helper for working with a SharePoint site through the legacy **SharePoint REST** endpoints with **NTLM** authentication. It keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
+A tiny, explicit Python helper for working with a SharePoint site through the legacy **SharePoint REST** endpoints with **NTLM** or **Kerberos** (Negotiate) authentication. It keeps a very thin abstraction so you can reason about the underlying HTTP calls without surprises.
 
 !!! warning "On-premises only"
-    sppyte uses NTLM (`requests-ntlm`) and targets **SharePoint on-premises** (2013, 2016, 2019, Subscription Edition). SharePoint Online does not accept NTLM.
+    sppyte targets **SharePoint on-premises** (2013, 2016, 2019, Subscription Edition). SharePoint Online does not accept NTLM or Kerberos.
 
 ## Installation
 
@@ -11,7 +11,7 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
 pip install sppyte
 ```
 
-Python 3.10 or later. The only runtime dependency is `requests-ntlm` (which brings `requests`).
+Python 3.10 or later. Runtime dependencies: `requests`, `pyspnego` and `cryptography`. Add `sppyte[kerberos]` for Kerberos on Linux/macOS.
 
 ## Quickstart
 
@@ -37,7 +37,7 @@ with Site("https://sharepoint.example.com", "/sites/parrots", "jsmith", PASSWORD
 
 | | |
 |---|---|
-| `Site` | NTLM session, argument validation, timeouts, TLS options, a managed form digest that is cached, refreshed and retried once on 403, and opt-in retry of transient read failures. |
+| `Site` | NTLM or Kerberos session, argument validation, timeouts, TLS options, a managed form digest that is cached, refreshed and retried once on 403, and opt-in retry of transient read failures. |
 | `List` | Add / update / delete items, attachments, OData reads with paging, CAML queries for lists above the 5,000-item threshold. |
 | `Library` | Folders, uploads from bytes / file objects / paths, streamed downloads, listing files and folders with paging. |
 | `Batch` | Several REST calls in one `/_api/$batch` round trip, writes grouped into a changeset. |
