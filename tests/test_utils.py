@@ -186,5 +186,5 @@ def test_parse_created_item_verbose():
 
 @pytest.mark.parametrize("r", [{}, {"Title": "x"}, {"Id": "3"}, {"Id": True}, [], None, {"d": []}])
 def test_parse_created_item_invalid_raises(r):
-    with pytest.raises(Exception, match="Created item|Item id"):
+    with pytest.raises(Exception, match=r"Created item|Item id"):
         parse_created_item(r)
