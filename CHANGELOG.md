@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-23
+
+First stable release. Identical in code to 1.0.0b2, which was verified against an on-premises
+SharePoint farm. Everything below under 1.0.0a1 through 1.0.0b2 applies, relative to 0.2.0; the
+"Migrating to 1.0" section of the README summarises the breaking changes.
+
+### Changed
+
+- Development status classifier is now Production/Stable.
+
 ## [1.0.0b2] - 2026-10-23
 
 ### Changed
@@ -136,7 +146,8 @@ First beta: the planned 1.0 feature set is complete.
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b2...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b2...v1.0.0
 [1.0.0b2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b1...v1.0.0b2
 [1.0.0b1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...v1.0.0b1
 [1.0.0a3]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...v1.0.0a3
