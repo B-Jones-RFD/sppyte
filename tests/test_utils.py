@@ -6,6 +6,8 @@ from sppyte.utils import (
     odata_path,
     parse_add_document,
     parse_add_item,
+    parse_context_info,
+    parse_created_item,
     parse_form_digest,
     parse_item_type,
 )
@@ -33,6 +35,9 @@ from sppyte.utils import (
             ("sites/demo", None, "Shared Documents", None, "Reports"),
             "/sites/demo/Shared Documents/Reports",
         ),
+        (("", "Docs"), "/Docs"),  # root site: empty relative url
+        (("/", "Docs", ""), "/Docs"),
+        (("", ""), "/"),
     ],
 )
 def test_build_path(parts, expected):
@@ -149,3 +154,37 @@ def test_parse_add_document_missing_raises():
 def test_parse_add_document_allows_empty_string():
     r = {"UniqueId": ""}
     assert parse_add_document(r) == ""
+
+
+# ------------------------- parse_context_info ---------------------------
+def test_parse_context_info_ok():
+    r = {"FormDigestValue": "abc", "FormDigestTimeoutSeconds": 900}
+    assert parse_context_info(r) == {"digest": "abc", "timeout": 900}
+
+
+@pytest.mark.parametrize("timeout", [None, 0, -5, "900", True])
+def test_parse_context_info_defaults_timeout(timeout):
+    r = {"FormDigestValue": "abc"}
+    if timeout is not None:
+        r["FormDigestTimeoutSeconds"] = timeout
+    assert parse_context_info(r)["timeout"] == 1800
+
+
+def test_parse_context_info_missing_digest_raises():
+    with pytest.raises(Exception, match="Form digest value"):
+        parse_context_info({"FormDigestTimeoutSeconds": 900})
+
+
+# ------------------------- parse_created_item ---------------------------
+def test_parse_created_item_nometadata():
+    assert parse_created_item({"Id": 3, "ID": 3, "Title": "t"}) == {"Id": 3, "ID": 3, "Title": "t"}
+
+
+def test_parse_created_item_verbose():
+    assert parse_created_item({"d": {"ID": 4, "Title": "t"}}) == {"ID": 4, "Title": "t", "Id": 4}
+
+
+@pytest.mark.parametrize("r", [{}, {"Title": "x"}, {"Id": "3"}, {"Id": True}, [], None, {"d": []}])
+def test_parse_created_item_invalid_raises(r):
+    with pytest.raises(Exception, match="Created item|Item id"):
+        parse_created_item(r)

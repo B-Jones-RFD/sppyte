@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0a1] - 2026-10-23
+
+### Changed (breaking)
+
+- `List.add_item` returns the created item as a `dict` (including `Id`) instead of the integer ID.
+- `Library.list_contents(params, *subfolders)` is now `list_contents(*subfolders, params=None)`; `params` is keyword-only.
+- `List` and `Library` are no longer context managers and have no `connect()` / `close()`; the `Site` is the sole owner of the HTTP session.
+- Non-2xx responses raise `SharePointError` (or `AuthError` for 401/403) instead of a bare `requests.HTTPError`. Both subclass `requests.HTTPError`, so existing handlers keep working. `SharePointError` exposes `status`, `code`, `message`, `retry_after` and `response`.
+- Requests time out after 30 seconds by default (`Site(timeout=...)`; `None` disables).
+- `Site(...)`, `site.list()` and `site.library()` no longer perform network I/O; the session is created on first request and the form digest on first write (or `connect()`).
+- `Site.form_digest` is a read-only property.
+- `List.add_attachment` sends `Content-Type: application/octet-stream`.
+- `Site` validates its arguments and raises `ConfigurationError` (a `ValueError`) for a scheme-less or path-bearing `host`, a `site_relative_url` without a leading `/`, a full URL as the relative URL, or an empty username.
+
+### Added
+
+- Managed form digest: cached until shortly before SharePoint's `FormDigestTimeoutSeconds`, shared between threads with a lock, refreshed and the write retried once on 403 when the body can be re-sent (a non-seekable stream is not retried). `Site.digest()`, `Site.invalidate_digest()`.
+- `digest=` keyword on every write method to supply your own digest (sent as-is, no retry).
+- `List.item_type` cached property; the entity type is looked up once per `List` instead of on every write.
+- `Site(domain=...)` for the NTLM domain, `verify=` / `cert=` TLS options, and `session=` to supply a pre-configured `requests.Session`.
+- `Site.request(..., digest=True | "value")` for extension calls that need a digest.
+- `Library.server_relative_url(*parts)`.
+- Exceptions `SppyteError`, `ConfigurationError`, `AuthError`, `SharePointError`, `SharePointErrorDetails`; helpers `sppyte.errors.parse_sharepoint_error`, `parse_retry_after`, `raise_for_status`.
+- `sppyte.utils.parse_context_info` and `parse_created_item`.
+- `__repr__` on `Site`, `List` and `Library` (password not shown).
+- Modules `sppyte.site`, `sppyte.lists`, `sppyte.libraries`, `sppyte.odata`; `sppyte.models` remains as a re-export shim.
+
+### Fixed
+
+- A write rejected with 403 for a stale digest is now retried with a **fresh** digest; previously the stale header was re-sent.
+- Replaying a request with a consumed file body is no longer attempted (it sent an empty body).
+
+### Deprecated
+
+- `sppyte.models` (import from `sppyte`), `SessionError` (no longer raised), `sppyte.utils.parse_add_item` (superseded by `parse_created_item`).
+
 ## [0.2.0] - 2026-10-23
 
 ### Fixed
@@ -36,5 +72,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...HEAD
+[1.0.0a1]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...v1.0.0a1
 [0.2.0]: https://github.com/B-Jones-RFD/sppyte/compare/v0.1.7...v0.2.0

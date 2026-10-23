@@ -1,21 +1,47 @@
 """
 sppyte.utils
-~~~~~~~~~~~~~~~
+~~~~~~~~~~~~
 
-This module provides utility functions that are used in sppyte.
+Response-parsing helpers. Each `parse_*` function pulls one value out of a
+SharePoint JSON payload and raises `ResponseFormatError` if it is missing.
+
+URL helpers live in `sppyte.odata` and are re-exported here for compatibility.
 """
 
-from typing import TypedDict
-from urllib.parse import quote
+from __future__ import annotations
+
+from typing import Any, TypedDict
 
 from sppyte.errors import ResponseFormatError
+from sppyte.odata import build_path, odata_literal, odata_path
+
+__all__ = [
+    "AddDocumentResponse",
+    "AddItemResponse",
+    "ContextInfo",
+    "FormDigestResponse",
+    "ItemTypeResponse",
+    "build_path",
+    "odata_literal",
+    "odata_path",
+    "parse_add_document",
+    "parse_add_item",
+    "parse_context_info",
+    "parse_created_item",
+    "parse_form_digest",
+    "parse_item_type",
+]
+
+DEFAULT_DIGEST_TIMEOUT = 1800
+"""SharePoint's default form digest lifetime in seconds (30 minutes)."""
 
 
 # ----------------------------- Types -----------------------------------------
-class FormDigestResponse(TypedDict):
-    """Minimal shape of the contextinfo JSON response to get Form Digest value."""
+class FormDigestResponse(TypedDict, total=False):
+    """Minimal shape of the contextinfo JSON response (``odata=nometadata``)."""
 
     FormDigestValue: str
+    FormDigestTimeoutSeconds: int
 
 
 class ItemTypeResponse(TypedDict):
@@ -36,46 +62,27 @@ class AddDocumentResponse(TypedDict):
     UniqueId: str
 
 
+class ContextInfo(TypedDict):
+    """Parsed ``/_api/contextinfo`` response."""
+
+    digest: str
+    timeout: int
+    """Lifetime of `digest` in seconds."""
+
+
 # ----------------------------- Methods ----------------------------------------
-def build_path(*parts: str | None) -> str:
+def parse_context_info(r: FormDigestResponse) -> ContextInfo:
     """
-    Join path segments as a normalized server-relative path.
+    Extract the form digest and its lifetime, or raise ResponseFormatError.
 
-    Example:
-        build_path("sites/demo", "Shared Documents", "Reports")
-        -> "/sites/demo/Shared Documents/Reports"
+    Falls back to SharePoint's 30-minute default when the lifetime is missing
+    or not a positive integer.
     """
-    path = "/".join([p.strip("/") for p in parts if p is not None])
-    return f"/{path}" if path else "/"
-
-
-def odata_literal(value: str) -> str:
-    """
-    Escape a value for use inside an OData string literal (`'...'`) in a URL path.
-
-    Apostrophes are doubled per OData and the result is percent-encoded so that
-    spaces, `#`, `%`, `?` and `&` cannot break the URL. The doubled apostrophes
-    survive encoding because SharePoint expects them literally.
-
-    Example:
-        odata_literal("O'Brien's #1 Report")
-        -> "O''Brien''s%20%231%20Report"
-    """
-    return quote(value.replace("'", "''"), safe="'")
-
-
-def odata_path(path: str) -> str:
-    """
-    Escape a server-relative path for use inside an OData string literal.
-
-    Each `/`-separated segment is passed through `odata_literal` so slashes
-    are preserved while everything else is escaped.
-
-    Example:
-        odata_path("/sites/demo/Shared Documents/Q1 '25")
-        -> "/sites/demo/Shared%20Documents/Q1%20''25"
-    """
-    return "/".join(odata_literal(segment) for segment in path.split("/"))
+    digest = parse_form_digest(r)
+    timeout = r.get("FormDigestTimeoutSeconds")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        timeout = DEFAULT_DIGEST_TIMEOUT
+    return {"digest": digest, "timeout": timeout}
 
 
 def parse_form_digest(r: FormDigestResponse) -> str:
@@ -109,6 +116,24 @@ def parse_add_item(r: AddItemResponse) -> int:
     if item_type == -1:
         raise ResponseFormatError(msg)
     return item_type
+
+
+def parse_created_item(r: Any) -> dict[str, Any]:
+    """
+    Return the created list item from an Add Item response, guaranteeing an
+    integer ``Id`` key. Accepts both the ``nometadata`` shape (flat object) and
+    the ``verbose`` shape (``{"d": {...}}``). Raises ResponseFormatError
+    otherwise.
+    """
+    msg = "Created item"
+    item = r.get("d", r) if isinstance(r, dict) else None
+    if not isinstance(item, dict):
+        raise ResponseFormatError(msg)
+    sp_id = item.get("Id", item.get("ID"))
+    if not isinstance(sp_id, int) or isinstance(sp_id, bool):
+        msg = "Item id"
+        raise ResponseFormatError(msg)
+    return {**item, "Id": sp_id}
 
 
 def parse_add_document(r: AddDocumentResponse) -> str:

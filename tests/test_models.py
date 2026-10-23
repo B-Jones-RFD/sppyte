@@ -1,5 +1,5 @@
 """
-HTTP-level tests for Site, List and Library using the `responses` mock.
+HTTP-level tests for List and Library using the `responses` mock.
 
 Each test registers the SharePoint responses it expects, calls the sppyte
 method, then asserts on the exact URL, headers and body that were sent.
@@ -8,120 +8,12 @@ method, then asserts on the exact URL, headers and body that were sent.
 from __future__ import annotations
 
 import io
-import json
-import re
 
 import pytest
 import responses
-from requests import HTTPError
 
 from sppyte import Library, List, ResponseFormatError, Site
-
-HOST = "https://sp.example.com"
-SITE_REL = "/sites/parrots"
-BASE = f"{HOST}{SITE_REL}"
-CONTEXTINFO = f"{BASE}/_api/contextinfo"
-DIGEST = "0xDIGEST,23 Oct 2026 12:00:00 -0000"
-ANY_URL = re.compile(re.escape(HOST) + r"/.*")
-
-
-def _json_body(call) -> dict:
-    body = call.request.body
-    if isinstance(body, bytes):
-        body = body.decode()
-    return json.loads(body)
-
-
-@pytest.fixture
-def mocked():
-    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
-        yield rsps
-
-
-@pytest.fixture
-def site(mocked) -> Site:
-    """A connected Site. The contextinfo call is the first recorded call."""
-    mocked.add(responses.POST, CONTEXTINFO, json={"FormDigestValue": DIGEST})
-    s = Site(HOST, SITE_REL, "user", "pass")
-    s.connect()
-    return s
-
-
-# ------------------------------- Site ----------------------------------------
-def test_site_normalizes_paths():
-    s = Site(f"{HOST}/", "sites/parrots/", "u", "p")
-    assert s.site_path == BASE
-
-
-def test_site_attributes_are_per_instance():
-    a = Site(HOST, SITE_REL, "u", "p")
-    b = Site(HOST, SITE_REL, "u", "p")
-    assert a.session is None
-    assert a.form_digest is None
-    a.form_digest = "x"
-    assert b.form_digest is None
-    assert "session" not in Site.__dict__
-    assert "form_digest" not in Site.__dict__
-
-
-def test_connect_fetches_form_digest(site, mocked):
-    assert site.form_digest == DIGEST
-    call = mocked.calls[0]
-    assert call.request.url == CONTEXTINFO
-    assert call.request.headers["Accept"] == "application/json;odata=nometadata"
-    assert call.request.headers["Content-Type"] == "application/json;odata=verbose"
-
-
-def test_context_manager_connects_and_closes(mocked):
-    mocked.add(responses.POST, CONTEXTINFO, json={"FormDigestValue": DIGEST})
-    with Site(HOST, SITE_REL, "u", "p") as s:
-        assert s.session is not None
-        assert s.form_digest == DIGEST
-    assert len(mocked.calls) == 1
-
-
-def test_request_connects_lazily(mocked):
-    mocked.add(responses.POST, CONTEXTINFO, json={"FormDigestValue": DIGEST})
-    mocked.add(responses.GET, f"{BASE}/_api/web", json={"Title": "Parrots"})
-    s = Site(HOST, SITE_REL, "u", "p")
-    r = s.request("get", "/_api/web")
-    assert r.json()["Title"] == "Parrots"
-    assert [c.request.url for c in mocked.calls] == [CONTEXTINFO, f"{BASE}/_api/web"]
-
-
-def test_request_strips_slashes(site, mocked):
-    mocked.add(responses.GET, f"{BASE}/_api/web", json={})
-    site.request("get", "///_api/web///")
-    assert mocked.calls[-1].request.url == f"{BASE}/_api/web"
-
-
-def test_request_raises_for_status(site, mocked):
-    mocked.add(responses.GET, f"{BASE}/_api/web", status=404, json={"error": "nope"})
-    with pytest.raises(HTTPError):
-        site.request("get", "/_api/web")
-
-
-def test_request_replays_once_on_403(site, mocked):
-    url = f"{BASE}/_api/web"
-    mocked.add(responses.GET, url, status=403)
-    mocked.add(responses.POST, CONTEXTINFO, json={"FormDigestValue": "fresh"})
-    mocked.add(responses.GET, url, json={"ok": True})
-    r = site.request("get", "/_api/web")
-    assert r.json() == {"ok": True}
-    assert site.form_digest == "fresh"
-    assert [c.request.url for c in mocked.calls[1:]] == [url, CONTEXTINFO, url]
-
-
-def test_site_list_and_library_factories(site):
-    pets = site.list("Pets")
-    docs = site.library("Shared Documents")
-    assert isinstance(pets, List)
-    assert pets.site is site
-    assert pets.name == "Pets"
-    assert isinstance(docs, Library)
-    assert docs.site is site
-    assert docs.name == "Shared Documents"
-
+from tests.conftest import ANY_URL, BASE, DIGEST, HOST, SITE_REL, json_body
 
 # ------------------------------- List ----------------------------------------
 LIST_URL = f"{BASE}/_api/web/lists/GetByTitle('Pets')"
@@ -133,6 +25,29 @@ def pets(site) -> List:
     return site.list("Pets")
 
 
+def test_site_list_and_library_factories_do_no_io(mocked):
+    s = Site(HOST, SITE_REL, "u", "p")
+    pets = s.list("Pets")
+    docs = s.library("Shared Documents")
+    assert isinstance(pets, List)
+    assert pets.site is s
+    assert pets.name == "Pets"
+    assert isinstance(docs, Library)
+    assert docs.site is s
+    assert docs.name == "Shared Documents"
+    assert s.session is None
+    assert len(mocked.calls) == 0
+
+
+def test_list_has_no_session_ownership():
+    assert not hasattr(List, "__enter__")
+    assert not hasattr(List, "connect")
+    assert not hasattr(List, "close")
+    assert not hasattr(Library, "__enter__")
+    assert not hasattr(Library, "connect")
+    assert not hasattr(Library, "close")
+
+
 def test_get_item_type(pets, mocked):
     mocked.add(responses.GET, ANY_URL, json={"ListItemEntityTypeFullName": ITEM_TYPE})
     assert pets.get_item_type() == ITEM_TYPE
@@ -141,22 +56,49 @@ def test_get_item_type(pets, mocked):
     assert req.headers["Accept"] == "application/json;odata=nometadata"
 
 
-def test_add_item_adds_metadata_without_mutating_input(pets, mocked):
+def test_item_type_is_cached_per_list(pets, mocked):
     mocked.add(responses.GET, ANY_URL, json={"ListItemEntityTypeFullName": ITEM_TYPE})
-    mocked.add(responses.POST, ANY_URL, json={"ID": 42, "Title": "Polly"})
+    mocked.add(responses.POST, ANY_URL, json={"Id": 1})
+    mocked.add(responses.POST, ANY_URL, json={"Id": 2})
+    assert pets.item_type == ITEM_TYPE
+    pets.add_item({"Title": "a"})
+    pets.add_item({"Title": "b"})
+    gets = [c for c in mocked.calls if c.request.method == "GET"]
+    assert len(gets) == 1
+
+
+def test_get_item_type_refreshes_cache(pets, mocked):
+    mocked.add(responses.GET, ANY_URL, json={"ListItemEntityTypeFullName": "old"})
+    mocked.add(responses.GET, ANY_URL, json={"ListItemEntityTypeFullName": "new"})
+    assert pets.item_type == "old"
+    assert pets.get_item_type() == "new"
+    assert pets.item_type == "new"
+
+
+def test_add_item_returns_created_item_without_mutating_input(pets, mocked):
+    mocked.add(responses.GET, ANY_URL, json={"ListItemEntityTypeFullName": ITEM_TYPE})
+    mocked.add(responses.POST, ANY_URL, json={"Id": 42, "ID": 42, "Title": "Polly"})
     item = {"Title": "Polly"}
-    assert pets.add_item(item) == 42
+    created = pets.add_item(item)
+    assert created["Id"] == 42
+    assert created["Title"] == "Polly"
     assert item == {"Title": "Polly"}, "caller's dict must not be modified"
 
     req = mocked.calls[-1].request
     assert req.url == f"{LIST_URL}/items"
     assert req.headers["X-RequestDigest"] == DIGEST
     assert req.headers["Content-Type"] == "application/json;odata=verbose"
-    assert _json_body(mocked.calls[-1]) == {"__metadata": {"type": ITEM_TYPE}, "Title": "Polly"}
+    assert json_body(mocked.calls[-1]) == {"__metadata": {"type": ITEM_TYPE}, "Title": "Polly"}
+
+
+def test_add_item_accepts_verbose_response(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"d": {"ID": 5, "Title": "x"}})
+    created = pets.add_item({"__metadata": {"type": ITEM_TYPE}, "Title": "x"})
+    assert created["Id"] == 5
 
 
 def test_add_item_skips_lookup_when_metadata_given(pets, mocked):
-    mocked.add(responses.POST, ANY_URL, json={"ID": 7})
+    mocked.add(responses.POST, ANY_URL, json={"Id": 7})
     pets.add_item({"__metadata": {"type": ITEM_TYPE}, "Title": "x"})
     # contextinfo + POST only; no GET for the item type
     assert [c.request.method for c in mocked.calls] == ["POST", "POST"]
@@ -166,6 +108,12 @@ def test_add_item_missing_id_raises(pets, mocked):
     mocked.add(responses.POST, ANY_URL, json={"Title": "no id"})
     with pytest.raises(ResponseFormatError):
         pets.add_item({"__metadata": {"type": ITEM_TYPE}})
+
+
+def test_add_item_explicit_digest(pets, mocked):
+    mocked.add(responses.POST, ANY_URL, json={"Id": 1})
+    pets.add_item({"__metadata": {"type": ITEM_TYPE}}, digest="manual")
+    assert mocked.calls[-1].request.headers["X-RequestDigest"] == "manual"
 
 
 def test_update_item_merges_without_mutating_input(pets, mocked):
@@ -180,7 +128,7 @@ def test_update_item_merges_without_mutating_input(pets, mocked):
     assert req.headers["X-HTTP-Method"] == "MERGE"
     assert req.headers["If-Match"] == "*"
     assert req.headers["X-RequestDigest"] == DIGEST
-    assert _json_body(mocked.calls[-1]) == {"__metadata": {"type": ITEM_TYPE}, "Title": "Renamed"}
+    assert json_body(mocked.calls[-1]) == {"__metadata": {"type": ITEM_TYPE}, "Title": "Renamed"}
 
 
 def test_delete_item(pets, mocked):
@@ -226,6 +174,7 @@ def test_add_attachment_bytes(pets, mocked):
     req = mocked.calls[-1].request
     assert req.url == f"{LIST_URL}/items('4')/AttachmentFiles/add(FileName='notes.txt')"
     assert req.body == b"hello"
+    assert req.headers["Content-Type"] == "application/octet-stream"
     assert req.headers["X-RequestDigest"] == DIGEST
 
 
@@ -263,13 +212,18 @@ def docs(site) -> Library:
     return site.library(LIB)
 
 
+def test_server_relative_url(docs):
+    assert docs.server_relative_url() == "/sites/parrots/Shared Documents"
+    assert docs.server_relative_url("A", "B") == "/sites/parrots/Shared Documents/A/B"
+
+
 def test_add_folder_uses_site_relative_url(docs, mocked):
     mocked.add(responses.POST, ANY_URL, json={"Exists": True})
     assert docs.add_folder("Reports", "2025") is True
     req = mocked.calls[-1].request
     assert req.url == f"{BASE}/_api/web/folders"
     assert req.headers["X-RequestDigest"] == DIGEST
-    assert _json_body(mocked.calls[-1]) == {"ServerRelativeUrl": "/sites/parrots/Shared Documents/Reports/2025"}
+    assert json_body(mocked.calls[-1]) == {"ServerRelativeUrl": "/sites/parrots/Shared Documents/Reports/2025"}
 
 
 def test_add_document_streams_file(docs, mocked):
@@ -325,12 +279,11 @@ def test_delete_folder_path_is_not_doubled(docs, mocked):
     assert req.headers["If-Match"] == "*"
 
 
-def test_list_contents(docs, mocked):
+def test_list_contents_params_is_keyword_only(docs, mocked):
     mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "a.txt"}]})
-    files = docs.list_contents({"$select": "Name"}, "Reports")
+    files = docs.list_contents("Reports", params={"$select": "Name"})
     assert files == [{"Name": "a.txt"}]
-    url = mocked.calls[-1].request.url
-    assert url == f"{folder_url('Reports')}/Files?%24select=Name"
+    assert mocked.calls[-1].request.url == f"{folder_url('Reports')}/Files?%24select=Name"
 
 
 def test_list_contents_root_no_params(docs, mocked):
@@ -347,15 +300,15 @@ def test_get_document(docs, mocked):
 
 def test_library_paths_are_escaped(site, mocked):
     mocked.add(responses.GET, ANY_URL, json={"value": []})
-    site.library("Bob's Files").list_contents(None, "Q1 '25", "100% done")
+    site.library("Bob's Files").list_contents("Q1 '25", "100% done")
     assert mocked.calls[-1].request.url == (
         f"{BASE}/_api/web/GetFolderByServerRelativeUrl("
         f"'/sites/parrots/Bob''s%20Files/Q1%20''25/100%25%20done')/Files"
     )
 
 
-def test_library_context_manager_closes_site(mocked):
-    mocked.add(responses.POST, CONTEXTINFO, json={"FormDigestValue": DIGEST})
-    s = Site(HOST, SITE_REL, "u", "p")
-    with Library(LIB, s) as lib:
-        assert lib.site.session is not None
+def test_root_site_paths(mocked):
+    mocked.add(responses.GET, ANY_URL, json={"value": []})
+    s = Site(HOST, "/", "u", "p")
+    s.library("Docs").list_contents()
+    assert mocked.calls[-1].request.url == f"{HOST}/_api/web/GetFolderByServerRelativeUrl('/Docs')/Files"

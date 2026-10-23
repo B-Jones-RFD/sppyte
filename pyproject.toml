@@ -12,11 +12,12 @@ license = "MIT"
 keywords = ["sharepoint", "sharepoint-rest", "odata", "ntlm", "on-premise"]
 authors = [{ name = "B-Jones-RFD" }]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]

@@ -9,5 +9,32 @@ It purposefully keeps a thin, explicit mapping to REST calls so behavior
 remains transparent and easy to debug.
 """
 
-from sppyte.errors import ResponseFormatError, SessionError  # noqa: F401
-from sppyte.models import Library, List, Site  # noqa: F401
+from sppyte.__about__ import __version__
+from sppyte.errors import (
+    AuthError,
+    ConfigurationError,
+    ResponseFormatError,
+    SessionError,
+    SharePointError,
+    SharePointErrorDetails,
+    SppyteError,
+)
+from sppyte.libraries import Library
+from sppyte.lists import List
+from sppyte.odata import Params
+from sppyte.site import Site
+
+__all__ = [
+    "AuthError",
+    "ConfigurationError",
+    "Library",
+    "List",
+    "Params",
+    "ResponseFormatError",
+    "SessionError",
+    "SharePointError",
+    "SharePointErrorDetails",
+    "Site",
+    "SppyteError",
+    "__version__",
+]
