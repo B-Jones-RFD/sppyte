@@ -22,6 +22,7 @@ from sppyte.errors import FORBIDDEN, AuthError, ConfigurationError, raise_for_st
 from sppyte.libraries import Library
 from sppyte.lists import List
 from sppyte.odata import Page, parse_page
+from sppyte.retry import RetryOptions, with_retry
 from sppyte.utils import parse_context_info
 
 if TYPE_CHECKING:
@@ -69,6 +70,9 @@ class Site:
             `requests.Session.cert`.
         session: Pre-configured `requests.Session` to use instead of creating one. sppyte
             sets NTLM auth on it only if it has no `auth`, and does not close it.
+        retry: Retry transient failures on reads (``GET`` requests and CAML queries).
+            ``True`` for the defaults, a `RetryOptions` to tune, ``None`` (default) for off.
+            Writes are never retried. See `sppyte.retry`.
 
     Raises:
         ConfigurationError: if `host` or `site_relative_url` are malformed.
@@ -86,6 +90,7 @@ class Site:
         verify: bool | str | None = None,
         cert: str | tuple[str, str] | None = None,
         session: Session | None = None,
+        retry: RetryOptions | bool | None = None,
     ):
         self.host = _validate_host(host)
         self.relative_url = _validate_relative_url(site_relative_url)
@@ -103,6 +108,13 @@ class Site:
         self.timeout = timeout
         self.verify = verify
         self.cert = cert
+        self.retry: RetryOptions | None
+        if retry is True:
+            self.retry = RetryOptions()
+        elif isinstance(retry, RetryOptions):
+            self.retry = retry
+        else:
+            self.retry = None
 
         self.session: Session | None = session
         self._owns_session = session is None
@@ -207,6 +219,7 @@ class Site:
         path: str,
         *,
         digest: str | bool | None = None,
+        retry: bool | None = None,
         **kwargs: Any,
     ) -> Response:
         """
@@ -222,13 +235,22 @@ class Site:
                 is refreshed and the request retried once, provided the body can
                 be re-sent (bytes, str, JSON, or a seekable file). A ``str`` sends
                 that digest as-is with no retry. ``None``/``False`` sends none.
+            retry: Whether the Site's `retry` policy applies to this call. Defaults
+                to ``True`` for ``GET`` without a digest (reads) and ``False``
+                otherwise. Has no effect unless the Site was created with ``retry``.
 
         Raises:
             AuthError: on 401/403.
             SharePointError: on any other 4xx/5xx.
         """
+        if retry is None:
+            retry = method.upper() == "GET" and not digest
+        policy = self.retry if retry else None
+        return with_retry(policy, lambda: self._request_once(method, path, digest, kwargs))
+
+    def _request_once(self, method: str, path: str, digest: str | bool | None, kwargs: dict[str, Any]) -> Response:
         url = f"{self.site_path}/{path.strip('/')}"
-        kwargs.setdefault("timeout", self.timeout)
+        kwargs = {"timeout": self.timeout, **kwargs}
 
         if not digest:
             return self._send(method, url, **kwargs)
@@ -264,7 +286,7 @@ class Site:
             raise ConfigurationError(msg)
         kwargs.setdefault("timeout", self.timeout)
         headers = {"Accept": "application/json;odata=nometadata", **(kwargs.pop("headers", None) or {})}
-        r = self._send("get", next_link, headers=headers, **kwargs)
+        r = with_retry(self.retry, lambda: self._send("get", next_link, headers=headers, **kwargs))
         return parse_page(r.json())
 
     # ----------------------------------------------------------- helpers ----

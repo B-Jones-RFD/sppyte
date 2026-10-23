@@ -149,6 +149,7 @@ class List:
             params=params,
             json={"query": query},
             digest=digest or True,
+            retry=True,  # GetItems is a POST but idempotent, so the read policy applies
         )
         return parse_page(r.json())
 

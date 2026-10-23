@@ -23,6 +23,7 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
   - [Batching requests](#batching-requests)
   - [Large files](#large-files)
   - [Errors](#errors)
+  - [Retrying transient failures](#retrying-transient-failures)
   - [Timeouts, TLS and proxies](#timeouts-tls-and-proxies)
   - [Special characters](#special-characters)
   - [Extension requests](#extension-requests)
@@ -49,6 +50,7 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
   - List files and folders, page through them, and control output with [OData](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/use-odata-query-operations-in-sharepoint-rest-requests#odata-query-operators-supported-in-the-sharepoint-rest-service) params
 - `Site.batch()` to send several REST calls in one `/_api/$batch` round trip (SharePoint 2016+).
 - Exceptions that carry SharePoint's own error message, status code and `Retry-After`.
+- Opt-in retry of transient read failures with exponential backoff, honouring `Retry-After`.
 - Access other [SharePoint REST service](https://learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/get-to-know-the-sharepoint-rest-service) endpoints as needed.
 - Fully typed (`py.typed`).
 
@@ -126,7 +128,7 @@ with Site(HOST, SITE, USER, PASS, domain="CONTOSO") as site:
 
 ### Connecting
 
-`Site(host, site_relative_url, username, password, *, domain=None, timeout=30.0, verify=None, cert=None, session=None)`
+`Site(host, site_relative_url, username, password, *, domain=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)`
 
 - `host` is scheme and host only: `"https://sharepoint.example.com"`.
 - `site_relative_url` is the server-relative URL of the site (web): `"/sites/parrots"`, or `""` / `"/"` for the root site.
@@ -282,6 +284,22 @@ except SharePointError as e:
 
 Because `SharePointError` subclasses `requests.HTTPError`, existing `except HTTPError` handlers keep working. Transport failures (DNS, connection refused, timeouts) are still raised by `requests` as `requests.ConnectionError` / `requests.Timeout`.
 
+### Retrying transient failures
+
+Off by default. `Site(..., retry=True)` retries **reads** — `GET` requests (list/library reads, `get_page`, the `iter_*` helpers) and CAML `query` — that fail with a connection error, a timeout, or HTTP 429 / 502 / 503 / 504. Writes and `$batch` are never retried. Delays use exponential backoff with full jitter (`random(0, min(max_delay, base_delay·2ⁿ))`); when SharePoint sends `Retry-After` that wait is used instead, and if it exceeds `max_delay` the error is raised immediately so you can decide.
+
+```py
+from sppyte import RetryOptions, Site
+
+site = Site(HOST, SITE, USER, PASS, retry=True)                               # 2 retries, 0.2 s base, 5 s cap
+site = Site(HOST, SITE, USER, PASS, retry=RetryOptions(retries=4, base_delay=0.5, max_delay=20))
+
+# Custom predicate: (exception, attempt_number) -> bool
+site = Site(..., retry=RetryOptions(retry_on=lambda exc, n: is_transient(exc) and n <= 3))
+```
+
+`site.request(..., retry=False)` opts a single read out; `retry=True` opts an idempotent `POST` in.
+
 ### Timeouts, TLS and proxies
 
 - `timeout` (default `30.0` seconds) applies to every request and can be a `(connect, read)` tuple. Pass `timeout=None` to disable (not recommended). Individual calls to `site.request(...)` can override it.
@@ -319,9 +337,9 @@ site.request(
 
 ### Site
 
-#### `Site(host, site_relative_url, username, password, *, domain=None, timeout=30.0, verify=None, cert=None, session=None)`
+#### `Site(host, site_relative_url, username, password, *, domain=None, timeout=30.0, verify=None, cert=None, session=None, retry=None)`
 
-See [Connecting](#connecting) and [Timeouts, TLS and proxies](#timeouts-tls-and-proxies). Raises `ConfigurationError` for malformed options.
+See [Connecting](#connecting), [Retrying transient failures](#retrying-transient-failures) and [Timeouts, TLS and proxies](#timeouts-tls-and-proxies). Raises `ConfigurationError` for malformed options.
 
 | member | |
 |---|---|
@@ -329,7 +347,8 @@ See [Connecting](#connecting) and [Timeouts, TLS and proxies](#timeouts-tls-and-
 | `close()` | Forget the digest and close the session (if sppyte created it). |
 | `list(name)` | A `List` bound to this site. No I/O. |
 | `library(name)` | A `Library` bound to this site. No I/O. |
-| `request(method, path, *, digest=None, **kwargs)` | Low-level request; see [Extension requests](#extension-requests). |
+| `request(method, path, *, digest=None, retry=None, **kwargs)` | Low-level request; see [Extension requests](#extension-requests). |
+| `retry` | The `RetryOptions` in effect, or `None`. |
 | `digest(*, refresh=False)` | The managed form digest, fetching/refreshing as needed. |
 | `get_form_digest()` | Always fetch a fresh digest (and cache it). |
 | `invalidate_digest()` | Drop the cached digest. |

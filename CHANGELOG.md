@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0b1] - 2026-10-23
+
+First beta: the planned 1.0 feature set is complete.
+
+### Added
+
+- Opt-in retry: `Site(retry=True | RetryOptions(...))` retries reads (`GET` requests, `get_page`, CAML
+  `query`) on connection errors, timeouts and HTTP 429/502/503/504 with exponential backoff and full
+  jitter, honouring `Retry-After` (and stopping when it exceeds `max_delay`). Writes and `$batch` are
+  never retried. `Site.request(retry=...)` overrides per call. `sppyte.retry` exposes `RetryOptions`,
+  `is_transient`, `with_retry`, `RETRYABLE_STATUSES`.
+
 ## [1.0.0a3] - 2026-10-23
 
 ### Added
@@ -106,7 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b1...HEAD
+[1.0.0b1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...v1.0.0b1
 [1.0.0a3]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...v1.0.0a3
 [1.0.0a2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...v1.0.0a2
 [1.0.0a1]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...v1.0.0a1
