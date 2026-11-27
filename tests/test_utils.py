@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib
 import sys
 
@@ -23,7 +25,7 @@ from sppyte.utils import (
     parse_json,
     parse_object,
 )
-from tests.conftest import HOST
+from tests.conftest import HOST, LOGIN_PAGE
 
 
 # ------------------------- build_path ---------------------------------
@@ -109,7 +111,7 @@ def test_parse_form_digest_ok():
 
 
 def test_parse_form_digest_missing_raises():
-    with pytest.raises(Exception, match="Form digest value"):
+    with pytest.raises(ResponseFormatError, match="Form digest value"):
         parse_form_digest({})
 
 
@@ -132,7 +134,7 @@ def test_parse_item_type_ok():
 
 
 def test_parse_item_type_missing_raises():
-    with pytest.raises(Exception, match="List item type"):
+    with pytest.raises(ResponseFormatError, match="List item type"):
         parse_item_type({})
 
 
@@ -156,13 +158,13 @@ def test_parse_add_item_ok_values(value):
 
 
 def test_parse_add_item_missing_raises():
-    with pytest.warns(DeprecationWarning), pytest.raises(Exception, match="Item id"):
+    with pytest.warns(DeprecationWarning), pytest.raises(ResponseFormatError, match="Item id"):
         parse_add_item({})
 
 
 def test_parse_add_item_negative_sentinel_raises():
     # Implementation uses -1 sentinel to detect missing/invalid ID
-    with pytest.warns(DeprecationWarning), pytest.raises(Exception, match="Item id"):
+    with pytest.warns(DeprecationWarning), pytest.raises(ResponseFormatError, match="Item id"):
         parse_add_item({"ID": -1})
 
 
@@ -173,7 +175,7 @@ def test_parse_add_document_ok():
 
 
 def test_parse_add_document_missing_raises():
-    with pytest.warns(DeprecationWarning), pytest.raises(Exception, match="Document id"):
+    with pytest.warns(DeprecationWarning), pytest.raises(ResponseFormatError, match="Document id"):
         parse_add_document({})
 
 
@@ -216,7 +218,7 @@ def test_parse_context_info_defaults_timeout(timeout):
 
 
 def test_parse_context_info_missing_digest_raises():
-    with pytest.raises(Exception, match="Form digest value"):
+    with pytest.raises(ResponseFormatError, match="Form digest value"):
         parse_context_info({"FormDigestTimeoutSeconds": 900})
 
 
@@ -241,7 +243,7 @@ def test_parse_json_decodes_body(mocked):
     assert parse_json(fetch(mocked, '{"a": [1, 2]}', "application/json")) == {"a": [1, 2]}
 
 
-@pytest.mark.parametrize("body", ["<html><body>Sign in</body></html>", "", "{not json"])
+@pytest.mark.parametrize("body", [LOGIN_PAGE, "", "{not json"])
 def test_parse_json_non_json_raises(mocked, body):
     with pytest.raises(ResponseFormatError, match=r"not JSON.*text/html") as exc:
         parse_json(fetch(mocked, body, "text/html"))
@@ -271,7 +273,7 @@ def test_parse_created_item_verbose():
 
 @pytest.mark.parametrize("r", [{}, {"Title": "x"}, {"Id": "3"}, {"Id": True}, [], None, {"d": []}])
 def test_parse_created_item_invalid_raises(r):
-    with pytest.raises(Exception, match=r"Created item|Item id"):
+    with pytest.raises(ResponseFormatError, match=r"Created item|Item id"):
         parse_created_item(r)
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import re
 
 import pytest
 import responses
+from requests import Response
 
 from sppyte import Site
 
@@ -14,6 +16,20 @@ BASE = f"{HOST}{SITE_REL}"
 CONTEXTINFO = f"{BASE}/_api/contextinfo"
 DIGEST = "0xDIGEST,23 Oct 2026 12:00:00 -0000"
 ANY_URL = re.compile(re.escape(HOST) + r"/.*")
+WEB = f"{BASE}/_api/web"
+LOGIN_PAGE = "<html><body>Sign in</body></html>"
+"""An HTML sign-in page, as a server answers with when it bounces an unauthenticated request."""
+
+
+def make_response(status: int, body: str = "", headers: dict[str, str] | None = None, reason: str = "") -> Response:
+    """Build a `requests.Response` by hand, without a transport."""
+    r = Response()
+    r.status_code = status
+    r.reason = reason
+    r.raw = io.BytesIO(body.encode())
+    r.encoding = "utf-8"
+    r.headers.update(headers or {})
+    return r
 
 
 def json_body(call) -> dict:

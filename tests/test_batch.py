@@ -7,7 +7,16 @@ import re
 import pytest
 import responses
 
-from sppyte import Batch, BatchRequest, BatchResponse, ConfigurationError, ResponseFormatError, Site
+from sppyte import (
+    AuthError,
+    Batch,
+    BatchRequest,
+    BatchResponse,
+    ConfigurationError,
+    ResponseFormatError,
+    SharePointError,
+    Site,
+)
 from sppyte.batch import build_batch_body, multipart_boundary, parse_batch_response
 from tests.conftest import ANY_URL, BASE, DIGEST, HOST, SITE_REL
 
@@ -233,6 +242,33 @@ def test_batch_send_count_mismatch_raises(site, mocked):
     batch = site.batch().get("_api/a").get("_api/b")
     with pytest.raises(ResponseFormatError, match="expected 2"):
         batch.send()
+
+
+def test_batch_send_raises_for_failed_batch(site, mocked):
+    mocked.add(
+        responses.POST,
+        f"{BASE}/_api/$batch",
+        status=500,
+        json={"odata.error": {"message": {"value": "Boom"}}},
+    )
+    with pytest.raises(SharePointError, match="Boom") as exc_info:
+        site.batch().get("_api/a").send()
+    assert not isinstance(exc_info.value, AuthError)
+    assert exc_info.value.status == 500
+
+
+def test_batch_send_raises_auth_error_for_401(site, mocked):
+    mocked.add(responses.POST, f"{BASE}/_api/$batch", status=401)
+    with pytest.raises(AuthError) as exc_info:
+        site.batch().get("_api/a").send()
+    assert exc_info.value.status == 401
+    assert len(mocked.calls) == 2  # contextinfo, then the one $batch call
+
+
+def test_batch_send_rejects_non_multipart_reply(site, mocked):
+    mocked.add(responses.POST, f"{BASE}/_api/$batch", status=200, json={"value": []})
+    with pytest.raises(ResponseFormatError, match="not multipart"):
+        site.batch().get("_api/a").send()
 
 
 def test_batch_send_uses_explicit_digest(mocked):

@@ -1,9 +1,15 @@
-"""A fake NTLM-authenticating server, implemented as a `requests` transport adapter.
+"""The in-process fake servers, implemented as `requests` transport adapters.
 
-It speaks just enough NTLM to drive the client through the three-leg handshake:
+`FakeNtlmAdapter` speaks just enough NTLM to drive the client through the three-leg handshake:
 a bare request gets 401 + `WWW-Authenticate: NTLM`; a Type 1 (NEGOTIATE) token
 gets 401 + a canned Type 2 (CHALLENGE); a Type 3 (AUTHENTICATE) token is
 accepted without verification and answered with 200. Every request is recorded.
+
+Options turn the fake into a server that rejects the credentials (`accept=False`)
+or answers the opening token without a challenge token (`challenge=False`).
+`FakeNegotiateAdapter` plays a Kerberos server that accepts the first token,
+`FakeProxyAdapter` an NTLM-authenticating proxy, and `RedirectAdapter` a server
+that redirects every request elsewhere.
 """
 
 from __future__ import annotations
@@ -91,14 +97,53 @@ class _Raw(io.BytesIO):
         self.released = True
 
 
+_REASONS = {200: "OK", 302: "Found", 400: "Bad Request", 401: "Unauthorized", 407: "Proxy Authentication Required"}
+
+
+def _fake_response(
+    adapter: BaseAdapter, request: PreparedRequest, status: int, headers: dict[str, str], body: bytes = b""
+) -> Response:
+    """Build the `Response` a fake adapter returns for `request`."""
+    r = Response()
+    r.status_code = status
+    r.reason = _REASONS.get(status, "")
+    r.headers = CaseInsensitiveDict(headers)
+    r.raw = _Raw(body)
+    r.url = request.url or ""
+    r.request = request
+    r.connection = adapter  # type: ignore[assignment]  # types-requests declares an HTTPAdapter; any BaseAdapter works
+    return r
+
+
 class FakeNtlmAdapter(BaseAdapter):
     """Transport adapter playing the server side of an NTLM handshake."""
 
-    def __init__(self, *, schemes: str = "NTLM", set_cookie: str | None = None, body: bytes = b'{"ok": true}'):
+    def __init__(
+        self,
+        *,
+        schemes: str = "NTLM",
+        set_cookie: str | None = None,
+        body: bytes = b'{"ok": true}',
+        accept: bool = True,
+        challenge: bool = True,
+    ):
+        """Configure the fake server.
+
+        Args:
+            schemes: `WWW-Authenticate` value sent with a bare 401.
+            set_cookie: `Set-Cookie` value sent with the challenge, if any.
+            body: Body of the 200 that ends a successful handshake.
+            accept: `False` answers the AUTHENTICATE token with 401 + `WWW-Authenticate: NTLM`,
+                as a server does for a wrong password.
+            challenge: `False` answers the NEGOTIATE token with 401 + a bare `WWW-Authenticate: NTLM`
+                that carries no challenge token.
+        """
         super().__init__()
         self.schemes = schemes
         self.set_cookie = set_cookie
         self.body = body
+        self.accept = accept
+        self.challenge = challenge
         self.calls: list[PreparedRequest] = []
         self.authenticate_token: bytes | None = None
 
@@ -127,12 +172,16 @@ class FakeNtlmAdapter(BaseAdapter):
             data = b""
         kind = message_type(data)
         if kind == MSG_NEGOTIATE:
+            if not self.challenge:
+                return self._response(request, 401, {"WWW-Authenticate": "NTLM"})
             headers = {"WWW-Authenticate": "NTLM " + base64.b64encode(make_challenge()).decode()}
             if self.set_cookie:
                 headers["Set-Cookie"] = self.set_cookie
             return self._response(request, 401, headers)
         if kind == MSG_AUTHENTICATE:
             self.authenticate_token = data
+            if not self.accept:
+                return self._response(request, 401, {"WWW-Authenticate": "NTLM"})
             return self._response(request, 200, {"Content-Type": "application/json"}, self.body)
         # Anything else is rejected with a fresh challenge, as IIS does.
         return self._response(request, 401, {"WWW-Authenticate": self.schemes})
@@ -141,12 +190,94 @@ class FakeNtlmAdapter(BaseAdapter):
         return None
 
     def _response(self, request: PreparedRequest, status: int, headers: dict[str, str], body: bytes = b"") -> Response:
-        r = Response()
-        r.status_code = status
-        r.reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized"}.get(status, "")
-        r.headers = CaseInsensitiveDict(headers)
-        r.raw = _Raw(body)
-        r.url = request.url or ""
-        r.request = request
-        r.connection = self  # type: ignore[assignment]
-        return r
+        return _fake_response(self, request, status, headers, body)
+
+
+class FakeNegotiateAdapter(FakeNtlmAdapter):
+    """Transport adapter playing a Kerberos server that accepts the opening token.
+
+    A bare request gets 401 + `WWW-Authenticate: Negotiate`; any `Negotiate` token
+    is answered with 200, so the handshake ends after one leg.
+    """
+
+    def __init__(self, *, body: bytes = b'{"ok": true}'):
+        super().__init__(schemes="Negotiate", body=body)
+
+    def send(
+        self,
+        request: PreparedRequest,
+        stream: Any = None,
+        timeout: Any = None,
+        verify: Any = None,
+        cert: Any = None,
+        proxies: Any = None,
+    ) -> Response:
+        del stream, timeout, verify, cert, proxies  # transport options are irrelevant to the fake
+        self.calls.append(request.copy())
+        auth = request.headers.get("Authorization")
+        if isinstance(auth, bytes):
+            auth = auth.decode("ascii")
+        if auth is None or auth.partition(" ")[0].lower() != "negotiate":
+            return self._response(request, 401, {"WWW-Authenticate": self.schemes})
+        return self._response(request, 200, {"Content-Type": "application/json"}, self.body)
+
+
+class FakeProxyAdapter(BaseAdapter):
+    """Plays an NTLM-authenticating proxy: 407 + `Proxy-Authenticate` until a Type 3 token arrives."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[PreparedRequest] = []
+        self.authenticate_token: bytes | None = None
+
+    def send(
+        self,
+        request: PreparedRequest,
+        stream: Any = None,
+        timeout: Any = None,
+        verify: Any = None,
+        cert: Any = None,
+        proxies: Any = None,
+    ) -> Response:
+        del stream, timeout, verify, cert, proxies  # transport options are irrelevant to the fake
+        self.calls.append(request.copy())
+        auth = request.headers.get("Proxy-Authorization")
+        if isinstance(auth, bytes):
+            auth = auth.decode("ascii")
+        token = base64.b64decode(auth.partition(" ")[2]) if auth else b""
+        kind = message_type(token)
+        if kind == MSG_NEGOTIATE:
+            challenge = "NTLM " + base64.b64encode(make_challenge()).decode()
+            return _fake_response(self, request, 407, {"Proxy-Authenticate": challenge})
+        if kind == MSG_AUTHENTICATE:
+            self.authenticate_token = token
+            return _fake_response(self, request, 200, {"Content-Type": "application/json"}, b'{"ok": true}')
+        return _fake_response(self, request, 407, {"Proxy-Authenticate": "NTLM"})
+
+    def close(self) -> None:
+        return None
+
+
+class RedirectAdapter(BaseAdapter):
+    """Answers every request with a 302 to `location`."""
+
+    def __init__(self, location: str) -> None:
+        super().__init__()
+        self.location = location
+        self.calls: list[PreparedRequest] = []
+
+    def send(
+        self,
+        request: PreparedRequest,
+        stream: Any = None,
+        timeout: Any = None,
+        verify: Any = None,
+        cert: Any = None,
+        proxies: Any = None,
+    ) -> Response:
+        del stream, timeout, verify, cert, proxies  # transport options are irrelevant to the fake
+        self.calls.append(request.copy())
+        return _fake_response(self, request, 302, {"Location": self.location})
+
+    def close(self) -> None:
+        return None

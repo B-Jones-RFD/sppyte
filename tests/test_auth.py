@@ -7,24 +7,33 @@ import datetime
 import hashlib
 import io
 import warnings
+from typing import TYPE_CHECKING
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from requests import PreparedRequest, Request, Response, Session
-from requests.adapters import BaseAdapter
+from requests import PreparedRequest, Request, Session
 from requests.auth import AuthBase
-from requests.structures import CaseInsensitiveDict
 
 from sppyte import AuthError, ConfigurationError, Site, SpPremAuth
 from sppyte.auth import _extract_token, _pick_scheme, _rewind_body, certificate_hash
 from tests.conftest import BASE, HOST, SITE_REL
-from tests.fake_ntlm import MSG_AUTHENTICATE, MSG_NEGOTIATE, FakeNtlmAdapter, make_challenge, message_type
+from tests.fake_ntlm import (
+    MSG_AUTHENTICATE,
+    FakeNegotiateAdapter,
+    FakeNtlmAdapter,
+    FakeProxyAdapter,
+    RedirectAdapter,
+    message_type,
+)
+
+if TYPE_CHECKING:
+    from requests.adapters import BaseAdapter
 
 
-def _session(adapter: FakeNtlmAdapter, auth: AuthBase) -> Session:
+def _session(adapter: BaseAdapter, auth: AuthBase) -> Session:
     s = Session()
     s.mount("https://", adapter)
     s.mount("http://", adapter)
@@ -136,6 +145,31 @@ def test_no_second_attempt_when_already_authorized():
     assert len(server.calls) == 1
 
 
+def test_negotiate_single_leg_is_accepted_without_a_challenge():
+    server = FakeNegotiateAdapter()
+    s = _session(server, SpPremAuth("u", "p", protocol="negotiate"))
+    r = s.get(f"{BASE}/_api/web")
+
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    assert len(server.calls) == 2
+    assert server.calls[1].headers["Authorization"].startswith("Negotiate ")
+    assert [h.status_code for h in r.history] == [401]
+    assert r.history[0].request.headers.get("Authorization") is None
+
+
+def test_challenge_without_token_is_returned_unanswered():
+    server = FakeNtlmAdapter(challenge=False)
+    s = _session(server, SpPremAuth("u", "p"))
+    r = s.get(f"{BASE}/_api/web")
+
+    assert r.status_code == 401
+    assert len(server.calls) == 2, "no AUTHENTICATE leg without a challenge token"
+    assert r.request.headers["Authorization"].startswith("NTLM ")
+    assert [h.status_code for h in r.history] == [401]
+    assert r.history[0].request.headers.get("Authorization") is None
+
+
 def test_401_handshake_emits_no_warning():
     server = FakeNtlmAdapter()
     s = _session(server, SpPremAuth("u", "p"))
@@ -145,51 +179,8 @@ def test_401_handshake_emits_no_warning():
     assert r.status_code == 200
 
 
-class _ProxyNtlmAdapter(BaseAdapter):
-    """Plays an NTLM-authenticating proxy: 407 + `Proxy-Authenticate` until a Type 3 token arrives."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list[PreparedRequest] = []
-        self.authenticate_token: bytes | None = None
-
-    def send(self, request: PreparedRequest, *args, **kwargs) -> Response:
-        del args, kwargs
-        self.calls.append(request.copy())
-        auth = request.headers.get("Proxy-Authorization")
-        if isinstance(auth, bytes):
-            auth = auth.decode("ascii")
-        token = base64.b64decode(auth.partition(" ")[2]) if auth else b""
-        kind = message_type(token)
-        if kind == MSG_NEGOTIATE:
-            challenge = "NTLM " + base64.b64encode(make_challenge()).decode()
-            return self._response(request, 407, {"Proxy-Authenticate": challenge})
-        if kind == MSG_AUTHENTICATE:
-            self.authenticate_token = token
-            return self._response(request, 200, {"Content-Type": "application/json"}, b'{"ok": true}')
-        return self._response(request, 407, {"Proxy-Authenticate": "NTLM"})
-
-    def close(self) -> None:
-        return None
-
-    def _response(self, request: PreparedRequest, status: int, headers: dict[str, str], body: bytes = b"") -> Response:
-        r = Response()
-        r.status_code = status
-        r.headers = CaseInsensitiveDict(headers)
-        r.raw = _Raw(body)
-        r.url = request.url or ""
-        r.request = request
-        r.connection = self  # type: ignore[assignment]  # types-requests declares an HTTPAdapter; any BaseAdapter works
-        return r
-
-
-class _Raw(io.BytesIO):
-    def release_conn(self) -> None:
-        return None
-
-
 def test_proxy_407_handshake_is_deprecated():
-    proxy = _ProxyNtlmAdapter()
+    proxy = FakeProxyAdapter()
     s = Session()
     s.mount("https://", proxy)
     s.auth = SpPremAuth("jsmith", "pw", domain="CONTOSO")
@@ -203,7 +194,7 @@ def test_proxy_407_handshake_is_deprecated():
 
 
 def test_proxy_407_warning_points_at_the_caller():
-    proxy = _ProxyNtlmAdapter()
+    proxy = FakeProxyAdapter()
     first = proxy.send(Request("GET", f"{BASE}/_api/web").prepare())
     with pytest.warns(DeprecationWarning, match="2.0") as record:
         SpPremAuth("u", "p").handle_response(first)
@@ -249,7 +240,8 @@ def test_rewind_body_without_length_seeks_to_start():
 
 def test_rewind_body_ignores_bytes():
     req = Request("POST", f"{BASE}/x", data=b"abc").prepare()
-    _rewind_body(req)  # no exception
+    _rewind_body(req)
+    assert req.body == b"abc"
 
 
 def _self_signed_der(algorithm: hashes.SHA256 | hashes.SHA384) -> bytes:
@@ -279,32 +271,8 @@ def test_certificate_hash_uses_signature_algorithm():
 OTHER_HOST = "https://other.example.net"
 
 
-class _RedirectAdapter(BaseAdapter):
-    """Answers every request with a 302 to the same path on `OTHER_HOST`."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list[PreparedRequest] = []
-
-    def send(self, request: PreparedRequest, *args, **kwargs) -> Response:
-        del args, kwargs
-        self.calls.append(request.copy())
-        r = Response()
-        r.status_code = 302
-        r.reason = "Found"
-        r.headers = CaseInsensitiveDict({"Location": f"{OTHER_HOST}/_api/web"})
-        r.raw = io.BytesIO(b"")
-        r.url = request.url or ""
-        r.request = request
-        r.connection = self  # type: ignore[assignment]  # types-requests declares an HTTPAdapter; any BaseAdapter works
-        return r
-
-    def close(self) -> None:
-        return None
-
-
 def test_challenge_after_redirect_to_other_host_is_not_answered():
-    home = _RedirectAdapter()
+    home = RedirectAdapter(f"{OTHER_HOST}/_api/web")
     other = FakeNtlmAdapter()
     session = Session()
     session.mount("https://", home)
@@ -341,6 +309,20 @@ def test_site_authenticates_through_fake_server():
     assert site.principal == "CONTOSO\\jsmith"
 
 
+def test_site_raises_auth_error_when_credentials_are_rejected():
+    server = FakeNtlmAdapter(accept=False)
+    session = Session()
+    session.mount("https://", server)
+    site = Site(HOST, SITE_REL, "jsmith", "wrong", domain="CONTOSO", session=session)
+
+    with pytest.raises(AuthError) as exc_info:
+        site.request("get", "_api/web")
+
+    assert exc_info.value.status == 401
+    assert len(server.calls) == 3, "one handshake, never a second"
+    assert server.authenticate_token is not None
+
+
 def test_site_negotiate_sso_needs_no_credentials():
     site = Site(HOST, SITE_REL, protocol="negotiate")
     assert isinstance(site.auth, SpPremAuth)
@@ -357,11 +339,19 @@ def test_site_ntlm_requires_credentials():
 
 def test_site_accepts_custom_auth():
     class Marker(AuthBase):
-        def __call__(self, r):
+        def __call__(self, r: PreparedRequest) -> PreparedRequest:
+            r.headers["Authorization"] = "Negotiate bWFya2Vy"
             return r
 
     marker = Marker()
-    site = Site(HOST, SITE_REL, auth=marker)
+    server = FakeNegotiateAdapter()
+    session = Session()
+    session.mount("https://", server)
+    site = Site(HOST, SITE_REL, auth=marker, session=session)
     assert site.auth is marker
     assert site.principal is None
-    assert site._ensure_session().auth is marker  # noqa: SLF001
+
+    assert site.request("get", "_api/web").status_code == 200
+    assert site.session is not None
+    assert site.session.auth is marker
+    assert [c.headers["Authorization"] for c in server.calls] == ["Negotiate bWFya2Vy"]

@@ -14,7 +14,7 @@ import pytest
 import responses
 
 from sppyte import ConfigurationError, Library, List, Page, ResponseFormatError, SharePointError, Site
-from tests.conftest import ANY_URL, BASE, DIGEST, HOST, SITE_REL, json_body
+from tests.conftest import ANY_URL, BASE, DIGEST, HOST, LOGIN_PAGE, SITE_REL, json_body
 
 # ------------------------------- List ----------------------------------------
 LIST_URL = f"{BASE}/_api/web/lists/GetByTitle('Pets')"
@@ -185,9 +185,6 @@ def test_get_item_accepts_verbose_response(pets, mocked):
     assert pets.get_item(3) == {"Id": 3, "Title": "Sonny"}
 
 
-LOGIN_PAGE = "<html><body>Sign in</body></html>"
-
-
 @pytest.mark.parametrize(
     ("method", "call"),
     [
@@ -203,6 +200,24 @@ def test_list_non_json_2xx_raises_response_format_error(pets, mocked, method, ca
     mocked.add(method, ANY_URL, body=LOGIN_PAGE, status=200, content_type="text/html")
     with pytest.raises(ResponseFormatError, match="not JSON"):
         call(pets)
+
+
+@pytest.mark.parametrize(
+    ("method", "call"),
+    [
+        (responses.GET, lambda pets: pets.get_item(3)),
+        (responses.POST, lambda pets: pets.add_item({"__metadata": {"type": ITEM_TYPE}, "Title": "x"})),
+        (responses.POST, lambda pets: pets.update_item(3, {"__metadata": {"type": ITEM_TYPE}, "Title": "x"})),
+        (responses.POST, lambda pets: pets.delete_item(3)),
+        (responses.POST, lambda pets: pets.add_attachment(3, "a.txt", b"x")),
+        (responses.POST, lambda pets: pets.query("<View><RowLimit>5</RowLimit></View>")),
+    ],
+)
+def test_list_operations_raise_sharepoint_error(pets, mocked, method, call):
+    mocked.add(method, ANY_URL, status=400, json={"odata.error": {"message": {"value": "Bad request."}}})
+    with pytest.raises(SharePointError, match="Bad request"):
+        call(pets)
+    assert len(mocked.calls) == 2  # contextinfo + the failed request; no item-type lookup, no retry
 
 
 def test_get_contents_with_params(pets, mocked):
@@ -258,6 +273,18 @@ def test_iter_items_follows_next_link(pets, mocked):
 def test_get_all_items(pets, mocked):
     _three_pages(mocked, f"{LIST_URL}/items")
     assert [i["Id"] for i in pets.get_all_items()] == [1, 2, 3, 4, 5]
+
+
+def test_iter_items_max_pages(pets, mocked):
+    _three_pages(mocked, f"{LIST_URL}/items")
+    assert [i["Id"] for i in pets.iter_items(max_pages=2)] == [1, 2, 3, 4]
+    assert len(mocked.calls) == 3  # contextinfo + 2 pages
+
+
+def test_get_all_items_max_pages(pets, mocked):
+    _three_pages(mocked, f"{LIST_URL}/items")
+    assert [i["Id"] for i in pets.get_all_items(max_pages=1)] == [1, 2]
+    assert len(mocked.calls) == 2  # contextinfo + 1 page
 
 
 def test_iter_pages_max_pages(pets, mocked):
@@ -379,6 +406,7 @@ def test_add_attachment_file_like(pets, mocked):
     pets.add_attachment(4, "a b.txt", fh)
     req = mocked.calls[-1].request
     assert req.url.endswith("/AttachmentFiles/add(FileName='a%20b.txt')")
+    assert req.body == b"stream"
 
 
 def test_list_title_is_escaped(site, mocked):
@@ -437,6 +465,7 @@ def test_add_document_streams_file(docs, mocked):
     assert req.url == f"{folder_url('Reports', '2025')}/Files/add(url='report.pdf',overwrite=true)"
     assert req.headers["Content-Type"] == "application/octet-stream"
     assert req.headers["X-RequestDigest"] == DIGEST
+    assert req.body == b"%PDF-1.4"  # responses reads a file-like body into bytes before recording it
 
 
 def test_add_document_to_library_root(docs, mocked):
@@ -465,9 +494,13 @@ def test_add_document_from_path(docs, mocked, tmp_path):
     req = mocked.calls[-1].request
     assert req.url == f"{folder_url('Reports')}/Files/add(url='remote.bin',overwrite=true)"
     assert req.headers["Content-Type"] == "application/octet-stream"
+    assert req.body == b"\x00\x01\x02"
     # a str path works too
     mocked.add(responses.POST, ANY_URL, json={"Name": "remote.bin"})
-    docs.add_document("remote.bin", str(src))
+    assert docs.add_document("remote.bin", str(src))["Name"] == "remote.bin"
+    req = mocked.calls[-1].request
+    assert req.url == f"{folder_url()}/Files/add(url='remote.bin',overwrite=true)"
+    assert req.body == b"\x00\x01\x02"
 
 
 def test_folder_exists(docs, mocked):
@@ -502,6 +535,32 @@ def test_library_non_json_2xx_raises_response_format_error(docs, mocked, method,
     mocked.add(method, ANY_URL, body=LOGIN_PAGE, status=200, content_type="text/html")
     with pytest.raises(ResponseFormatError, match="not JSON"):
         call(docs)
+
+
+@pytest.mark.parametrize(
+    ("method", "call"),
+    [
+        (responses.POST, lambda docs: docs.add_folder("Reports")),
+        (responses.POST, lambda docs: docs.add_document("a.txt", b"x")),
+        (responses.POST, lambda docs: docs.delete_document("a.txt")),
+        (responses.POST, lambda docs: docs.delete_folder("Reports")),
+        (responses.GET, lambda docs: docs.get_document("a.txt")),
+        (responses.GET, lambda docs: docs.list_contents()),
+        (responses.GET, lambda docs: docs.list_folders()),
+    ],
+)
+def test_library_operations_raise_sharepoint_error(docs, mocked, method, call):
+    mocked.add(method, ANY_URL, status=400, json={"odata.error": {"message": {"value": "Bad request."}}})
+    with pytest.raises(SharePointError, match="Bad request"):
+        call(docs)
+    assert len(mocked.calls) == 2  # contextinfo + the failed request; no retry
+
+
+def test_add_document_overwrite_false_conflict_raises(docs, mocked):
+    mocked.add(responses.POST, ANY_URL, status=400, json={"odata.error": {"message": {"value": "exists"}}})
+    with pytest.raises(SharePointError, match="exists"):
+        docs.add_document("a.txt", b"x", overwrite=False)
+    assert mocked.calls[-1].request.url.endswith("/Files/add(url='a.txt',overwrite=false)")
 
 
 def test_delete_document(docs, mocked):
@@ -551,6 +610,32 @@ def test_library_paging(docs, mocked):
     mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "b"}]})
     assert docs.get_all_files("Reports") == [{"Name": "a"}, {"Name": "b"}]
     assert mocked.calls[-1].request.url == next_link
+
+
+def _two_file_pages(mocked) -> None:
+    next_link = f"{folder_url('Reports')}/Files?%24skiptoken=Paged%3DTRUE%26p_ID%3D100"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "a"}], "odata.nextLink": next_link})
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "b"}]})
+
+
+def test_library_iter_pages_max_pages(docs, mocked):
+    _two_file_pages(mocked)
+    pages = list(docs.iter_pages("Reports", max_pages=1))
+    assert pages == [[{"Name": "a"}]]
+    assert pages[0].next_link is not None
+    assert len(mocked.calls) == 2  # contextinfo + 1 page
+
+
+def test_library_iter_files_max_pages(docs, mocked):
+    _two_file_pages(mocked)
+    assert list(docs.iter_files("Reports", max_pages=1)) == [{"Name": "a"}]
+    assert len(mocked.calls) == 2  # contextinfo + 1 page
+
+
+def test_library_get_all_files_max_pages(docs, mocked):
+    _two_file_pages(mocked)
+    assert docs.get_all_files("Reports", max_pages=1) == [{"Name": "a"}]
+    assert len(mocked.calls) == 2  # contextinfo + 1 page
 
 
 def test_library_iter_pages_is_lazy(docs, mocked):

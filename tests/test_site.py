@@ -12,9 +12,7 @@ from requests import HTTPError, Session
 
 from sppyte import AuthError, ConfigurationError, ResponseFormatError, RetryOptions, SharePointError, Site
 from sppyte.site import _rewinder
-from tests.conftest import ANY_URL, BASE, CONTEXTINFO, DIGEST, HOST, SITE_REL, add_contextinfo
-
-WEB = f"{BASE}/_api/web"
+from tests.conftest import ANY_URL, BASE, CONTEXTINFO, DIGEST, HOST, LOGIN_PAGE, SITE_REL, WEB, add_contextinfo
 
 
 # ---------------------------------------------------------- validation ----
@@ -173,7 +171,7 @@ def test_connect_raises_on_html_contextinfo(mocked):
     mocked.add(
         responses.POST,
         CONTEXTINFO,
-        body="<html><body>Sign in</body></html>",
+        body=LOGIN_PAGE,
         status=200,
         content_type="text/html",
     )
@@ -191,6 +189,25 @@ def test_connect_raises_on_malformed_contextinfo(mocked, payload):
         s.connect()
 
 
+def test_connect_raises_auth_error_on_bad_credentials(mocked):
+    mocked.add(responses.POST, CONTEXTINFO, status=401)
+    s = Site(HOST, SITE_REL, "u", "wrong")
+    with pytest.raises(AuthError) as info:
+        s.connect()
+    assert info.value.status == 401
+    assert s.form_digest is None
+
+
+def test_context_manager_raises_auth_error_on_enter(mocked):
+    mocked.add(responses.POST, CONTEXTINFO, status=401)
+    entered = False
+    with pytest.raises(AuthError) as info, Site(HOST, SITE_REL, "u", "wrong"):
+        entered = True
+    assert info.value.status == 401
+    assert not entered
+    assert len(mocked.calls) == 1
+
+
 def test_get_page_non_json_raises(site, mocked):
     mocked.add(responses.GET, ANY_URL, body="<html></html>", status=200, content_type="text/html")
     with pytest.raises(ResponseFormatError, match="not JSON"):
@@ -205,6 +222,27 @@ def test_context_manager_connects_and_closes(mocked):
     assert s.session is None
     assert s.form_digest is None
     assert len(mocked.calls) == 1
+
+
+def test_context_manager_closes_when_body_raises(mocked):
+    add_contextinfo(mocked)
+
+    class BodyError(Exception):
+        pass
+
+    s = Site(HOST, SITE_REL, "u", "p")
+    opened: list[bool] = []
+
+    def use_site() -> None:
+        with s:
+            opened.append(s.session is not None)
+            raise BodyError
+
+    with pytest.raises(BodyError):
+        use_site()
+    assert opened == [True]
+    assert s.session is None
+    assert s.form_digest is None
 
 
 def test_close_keeps_user_session(mocked):
@@ -249,6 +287,33 @@ def test_concurrent_first_requests_share_one_session(mocked, monkeypatch):
     assert len(created) == 1
     assert s.session is created[0]
     assert len(mocked.calls) == workers
+
+
+def test_concurrent_digest_calls_share_one_fetch(mocked):
+    add_contextinfo(mocked)
+    s = Site(HOST, SITE_REL, "u", "p")
+    workers = 8
+    barrier = threading.Barrier(workers)
+    digests: list[str] = []
+    errors: list[BaseException] = []
+
+    def fetch_digest() -> None:
+        try:
+            barrier.wait(timeout=5)
+            digests.append(s.digest())
+        except BaseException as e:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(e)
+
+    threads = [threading.Thread(target=fetch_digest) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert not any(t.is_alive() for t in threads)
+    assert errors == []
+    assert digests == [DIGEST] * workers
+    assert len(mocked.calls) == 1
+    assert mocked.calls[0].request.url == CONTEXTINFO
 
 
 def test_ntlm_principal_includes_domain():

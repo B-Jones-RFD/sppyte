@@ -5,30 +5,32 @@ from __future__ import annotations
 import pytest
 import responses
 from requests import ConnectionError as RequestsConnectionError
-from requests import Response, Timeout
+from requests import Timeout
 
 from sppyte import AuthError, RetryOptions, SharePointError, Site, is_transient
 from sppyte.retry import with_retry
-from tests.conftest import ANY_URL, BASE, CONTEXTINFO, HOST, SITE_REL, add_contextinfo
+from tests.conftest import ANY_URL, BASE, CONTEXTINFO, HOST, SITE_REL, WEB, add_contextinfo, make_response
 
-WEB = f"{BASE}/_api/web"
 LIST_ITEMS = f"{BASE}/_api/web/lists/GetByTitle('Pets')/items"
 
 
 @pytest.fixture
-def sleeps(monkeypatch):
+def jitter_bounds() -> list[tuple[float, float]]:
+    """The `(low, high)` bounds each jittered delay was drawn from, filled in by `sleeps`."""
+    return []
+
+
+@pytest.fixture
+def sleeps(monkeypatch, jitter_bounds):
     """Record sleeps instead of waiting, and make jitter deterministic (always the cap)."""
     waits: list[float] = []
     monkeypatch.setattr("sppyte.retry.time.sleep", waits.append)
-    monkeypatch.setattr("sppyte.retry._random.uniform", lambda _a, b: b)
+    monkeypatch.setattr("sppyte.retry._random.uniform", lambda a, b: jitter_bounds.append((a, b)) or b)
     return waits
 
 
 def _sp_error(status: int, headers: dict | None = None) -> SharePointError:
-    r = Response()
-    r.status_code = status
-    r.headers.update(headers or {})
-    return SharePointError(r)
+    return SharePointError(make_response(status, headers=headers))
 
 
 # --------------------------------------------------------- is_transient ----
@@ -72,6 +74,30 @@ def test_with_retry_backoff_and_jitter(sleeps):
 
     assert with_retry(RetryOptions(retries=3, base_delay=0.5, max_delay=10), attempt) == "ok"
     assert sleeps == [0.5, 1.0]  # caps for attempts 1 and 2 (jitter patched to the cap)
+
+
+def test_with_retry_uses_full_jitter(sleeps, jitter_bounds):
+    outcomes = iter([Timeout(), Timeout(), "ok"])
+
+    def attempt():
+        o = next(outcomes)
+        if isinstance(o, Exception):
+            raise o
+        return o
+
+    with_retry(RetryOptions(retries=3, base_delay=0.5, max_delay=10), attempt)
+    assert jitter_bounds == [(0, 0.5), (0, 1.0)]
+    assert sleeps == [0.5, 1.0]
+
+
+def test_with_retry_jitter_upper_bound_is_capped(sleeps, jitter_bounds):
+    def attempt():
+        raise Timeout
+
+    with pytest.raises(Timeout):
+        with_retry(RetryOptions(retries=3, base_delay=1, max_delay=1.5), attempt)
+    assert jitter_bounds == [(0, 1), (0, 1.5), (0, 1.5)]
+    assert len(sleeps) == 3
 
 
 def test_with_retry_caps_delay(sleeps):
@@ -145,6 +171,19 @@ def test_with_retry_zero_retries():
 
     with pytest.raises(Timeout):
         with_retry(RetryOptions(retries=0), attempt)
+
+
+def test_with_retry_negative_retries_runs_once(sleeps):
+    calls = []
+
+    def attempt():
+        calls.append(1)
+        raise Timeout
+
+    with pytest.raises(Timeout):
+        with_retry(RetryOptions(retries=-1), attempt)
+    assert calls == [1]
+    assert sleeps == []
 
 
 # ------------------------------------------------------------- via Site ----
