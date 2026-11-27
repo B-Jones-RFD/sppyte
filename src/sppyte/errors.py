@@ -4,7 +4,7 @@ Hierarchy:
 
     SppyteError
     ├── ConfigurationError  (also a ValueError)
-    ├── SessionError        (kept for compatibility; no longer raised)
+    ├── SessionError        (deprecated, removed in 2.0; no longer raised)
     ├── ResponseFormatError
     └── SharePointError     (also a requests.HTTPError)
         └── AuthError
@@ -18,10 +18,11 @@ reads `HTTP 400: Column 'Foo' does not exist` instead of
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from requests import HTTPError, Response
 
@@ -35,19 +36,40 @@ class SppyteError(Exception):
 
 
 class ConfigurationError(SppyteError, ValueError):
-    """Raised when `Site` is constructed with malformed options."""
+    """Raised for a malformed option or argument, or a link to another host.
 
-
-class SessionError(SppyteError):
-    """Raised when an HTTP session is not available.
-
-    Kept for compatibility with 0.x; sessions are now created on demand, so
-    this is no longer raised.
+    For example a bad `Site` option, conflicting `Batch.add` arguments, or a
+    `next_link` that is not on the site's host.
     """
 
 
+class _SessionError(SppyteError):
+    """Deprecated; kept for compatibility with 0.x and no longer raised. Removed in 2.0.
+
+    Sessions are now created on demand. Reach it as `SessionError`; access
+    emits a `DeprecationWarning`.
+    """
+
+
+_SessionError.__name__ = _SessionError.__qualname__ = "SessionError"
+
+_SESSION_ERROR_DEPRECATED = "SessionError is deprecated and will be removed in sppyte 2.0; it is no longer raised"
+
+if TYPE_CHECKING:
+    SessionError = _SessionError
+
+
+def __getattr__(name: str) -> Any:
+    """Warn on access to deprecated names."""
+    if name == "SessionError":
+        warnings.warn(_SESSION_ERROR_DEPRECATED, DeprecationWarning, stacklevel=2)
+        return _SessionError
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
 class ResponseFormatError(SppyteError):
-    """Raised when an expected field is missing from a SharePoint JSON payload."""
+    """Raised when a 2xx response body is not JSON, is not in the expected shape, or lacks an expected field."""
 
 
 @dataclass(frozen=True)

@@ -8,11 +8,12 @@ method, then asserts on the exact URL, headers and body that were sent.
 from __future__ import annotations
 
 import io
+import threading
 
 import pytest
 import responses
 
-from sppyte import Library, List, Page, ResponseFormatError, SharePointError, Site
+from sppyte import ConfigurationError, Library, List, Page, ResponseFormatError, SharePointError, Site
 from tests.conftest import ANY_URL, BASE, DIGEST, HOST, SITE_REL, json_body
 
 # ------------------------------- List ----------------------------------------
@@ -63,6 +64,32 @@ def test_item_type_is_cached_per_list(pets, mocked):
     assert pets.item_type == ITEM_TYPE
     pets.add_item({"Title": "a"})
     pets.add_item({"Title": "b"})
+    gets = [c for c in mocked.calls if c.request.method == "GET"]
+    assert len(gets) == 1
+
+
+def test_concurrent_item_type_reads_share_one_fetch(pets, mocked):
+    mocked.add(responses.GET, ANY_URL, json={"ListItemEntityTypeFullName": ITEM_TYPE})
+    workers = 8
+    barrier = threading.Barrier(workers)
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def read_item_type() -> None:
+        try:
+            barrier.wait(timeout=5)
+            results.append(pets.item_type)
+        except BaseException as e:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(e)
+
+    threads = [threading.Thread(target=read_item_type) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert not any(t.is_alive() for t in threads)
+    assert errors == []
+    assert results == [ITEM_TYPE] * workers
     gets = [c for c in mocked.calls if c.request.method == "GET"]
     assert len(gets) == 1
 
@@ -147,6 +174,37 @@ def test_get_item(pets, mocked):
     assert mocked.calls[-1].request.url == f"{LIST_URL}/items('3')"
 
 
+def test_get_item_non_object_response_raises(pets, mocked):
+    mocked.add(responses.GET, ANY_URL, json=[{"Id": 3}])
+    with pytest.raises(ResponseFormatError):
+        pets.get_item(3)
+
+
+def test_get_item_accepts_verbose_response(pets, mocked):
+    mocked.add(responses.GET, ANY_URL, json={"d": {"Id": 3, "Title": "Sonny"}})
+    assert pets.get_item(3) == {"Id": 3, "Title": "Sonny"}
+
+
+LOGIN_PAGE = "<html><body>Sign in</body></html>"
+
+
+@pytest.mark.parametrize(
+    ("method", "call"),
+    [
+        (responses.GET, lambda pets: pets.get_item_type()),
+        (responses.GET, lambda pets: pets.get_contents()),
+        (responses.GET, lambda pets: pets.get_item(3)),
+        (responses.POST, lambda pets: pets.query("<View><RowLimit>5</RowLimit></View>")),
+        (responses.POST, lambda pets: pets.add_item({"__metadata": {"type": ITEM_TYPE}, "Title": "x"})),
+        (responses.POST, lambda pets: pets.add_attachment(3, "a.txt", b"x")),
+    ],
+)
+def test_list_non_json_2xx_raises_response_format_error(pets, mocked, method, call):
+    mocked.add(method, ANY_URL, body=LOGIN_PAGE, status=200, content_type="text/html")
+    with pytest.raises(ResponseFormatError, match="not JSON"):
+        call(pets)
+
+
 def test_get_contents_with_params(pets, mocked):
     mocked.add(responses.GET, ANY_URL, json={"value": [{"Id": 1}, {"Id": 2}]})
     items = pets.get_contents({"$select": "Id,Title", "$top": 5})
@@ -210,6 +268,21 @@ def test_iter_pages_max_pages(pets, mocked):
     assert len(mocked.calls) == 3  # contextinfo + 2 pages
 
 
+def test_iter_pages_is_lazy(pets, mocked):
+    _three_pages(mocked, f"{LIST_URL}/items")
+    pages = pets.iter_pages()
+    assert len(mocked.calls) == 1  # contextinfo only; nothing fetched until iteration starts
+    assert next(pages) == [{"Id": 1}, {"Id": 2}]
+    assert len(mocked.calls) == 2
+
+
+def test_iter_pages_raises_on_first_iteration(pets, mocked):
+    mocked.add(responses.GET, ANY_URL, status=404, json={"odata.error": {"message": {"value": "List not found."}}})
+    pages = pets.iter_pages()
+    with pytest.raises(SharePointError, match="List not found"):
+        next(pages)
+
+
 def test_list_path_is_public(pets):
     assert pets.path == "_api/web/lists/GetByTitle('Pets')"
 
@@ -264,8 +337,15 @@ def test_iter_query_handles_full_last_page(pets, mocked):
 
 
 def test_iter_query_requires_row_limit(pets):
-    with pytest.raises(ValueError, match="RowLimit"):
+    with pytest.raises(ConfigurationError, match="RowLimit") as exc_info:
         next(pets.iter_query("<View></View>"))
+    assert isinstance(exc_info.value, ValueError)
+    assert "<View></View>" in str(exc_info.value)
+
+
+def test_query_all_requires_row_limit(pets):
+    with pytest.raises(ConfigurationError, match="RowLimit"):
+        pets.query_all("<View>" + "x" * 200 + "</View>")
 
 
 def test_iter_query_requires_id_when_paging(pets, mocked):
@@ -401,6 +481,29 @@ def test_folder_exists_false(docs, mocked):
     assert docs.folder_exists("Missing") is False
 
 
+@pytest.mark.parametrize("payload", [{}, {"value": None}, {"value": "true"}, [True]])
+def test_folder_exists_malformed_response_raises(docs, mocked, payload):
+    mocked.add(responses.GET, ANY_URL, json=payload)
+    with pytest.raises(ResponseFormatError):
+        docs.folder_exists("Reports")
+
+
+@pytest.mark.parametrize(
+    ("method", "call"),
+    [
+        (responses.GET, lambda docs: docs.folder_exists("Reports")),
+        (responses.GET, lambda docs: docs.list_contents()),
+        (responses.GET, lambda docs: docs.list_folders()),
+        (responses.POST, lambda docs: docs.add_folder("Reports")),
+        (responses.POST, lambda docs: docs.add_document("a.txt", b"x")),
+    ],
+)
+def test_library_non_json_2xx_raises_response_format_error(docs, mocked, method, call):
+    mocked.add(method, ANY_URL, body=LOGIN_PAGE, status=200, content_type="text/html")
+    with pytest.raises(ResponseFormatError, match="not JSON"):
+        call(docs)
+
+
 def test_delete_document(docs, mocked):
     mocked.add(responses.POST, ANY_URL, status=200)
     assert docs.delete_document("report.pdf", "Reports", "2025") is True
@@ -450,6 +553,19 @@ def test_library_paging(docs, mocked):
     assert mocked.calls[-1].request.url == next_link
 
 
+def test_library_iter_pages_is_lazy(docs, mocked):
+    next_link = f"{folder_url('Reports')}/Files?%24skiptoken=Paged%3DTRUE%26p_ID%3D100"
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "a"}], "odata.nextLink": next_link})
+    mocked.add(responses.GET, ANY_URL, json={"value": [{"Name": "b"}]})
+    pages = docs.iter_pages("Reports")
+    assert len(mocked.calls) == 1  # contextinfo only; nothing fetched until iteration starts
+    assert next(pages) == [{"Name": "a"}]
+    assert len(mocked.calls) == 2
+    assert mocked.calls[-1].request.url == f"{folder_url('Reports')}/Files"
+    assert next(pages) == [{"Name": "b"}]
+    assert len(mocked.calls) == 3
+
+
 def test_list_contents_root_no_params(docs, mocked):
     mocked.add(responses.GET, ANY_URL, json={"value": []})
     assert docs.list_contents() == []
@@ -484,6 +600,31 @@ def test_download_to_path(docs, mocked, tmp_path):
     dest.parent.mkdir()
     assert docs.download("file.bin", dest, "Reports", chunk_size=3) == 8
     assert dest.read_bytes() == b"abcdefgh"
+
+
+def test_download_http_error_leaves_existing_file_unchanged(docs, mocked, tmp_path):
+    mocked.add(responses.GET, ANY_URL, status=404, json={"odata.error": {"message": {"value": "File Not Found."}}})
+    dest = tmp_path / "file.bin"
+    dest.write_bytes(b"keep me")
+    with pytest.raises(SharePointError, match="File Not Found"):
+        docs.download("missing.bin", dest)
+    assert dest.read_bytes() == b"keep me"
+
+
+def test_download_http_error_creates_no_file(docs, mocked, tmp_path):
+    mocked.add(responses.GET, ANY_URL, status=404, json={"odata.error": {"message": {"value": "File Not Found."}}})
+    dest = tmp_path / "file.bin"
+    with pytest.raises(SharePointError, match="File Not Found"):
+        docs.download("missing.bin", dest)
+    assert not dest.exists()
+
+
+def test_download_expands_user_home(docs, mocked, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    mocked.add(responses.GET, ANY_URL, body=b"abc")
+    assert docs.download("file.bin", "~/file.bin") == 3
+    assert (tmp_path / "file.bin").read_bytes() == b"abc"
 
 
 def test_download_to_file_object(docs, mocked):

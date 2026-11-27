@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import importlib
 import io
+import warnings
 from datetime import UTC, datetime
 
 import pytest
 from requests import HTTPError, Response
 
+import sppyte
+import sppyte.errors
 from sppyte import AuthError, SharePointError, SppyteError
 from sppyte.errors import (
     SharePointErrorDetails,
@@ -101,3 +105,46 @@ def test_raise_for_status():
     with pytest.raises(SharePointError) as info:
         raise_for_status(_response(500))
     assert not isinstance(info.value, AuthError)
+
+
+# --------------------------------------------------- SessionError (deprecated) ----
+def test_session_error_warns_from_package():
+    with pytest.warns(DeprecationWarning, match="sppyte 2.0"):
+        cls = sppyte.SessionError
+    assert cls.__name__ == "SessionError"
+    assert issubclass(cls, SppyteError)
+
+
+def test_session_error_warns_from_errors_module():
+    with pytest.warns(DeprecationWarning, match="sppyte 2.0"):
+        cls = sppyte.errors.SessionError
+    with pytest.warns(DeprecationWarning, match="sppyte 2.0"):
+        assert cls is sppyte.SessionError
+
+
+def test_session_error_from_import_warns():
+    with pytest.warns(DeprecationWarning, match="sppyte 2.0"):
+        from sppyte import SessionError
+    assert issubclass(SessionError, SppyteError)
+
+
+def test_session_error_still_catchable():
+    with pytest.warns(DeprecationWarning, match="sppyte 2.0"):
+        expected = sppyte.SessionError
+        error = sppyte.errors.SessionError("no session")
+    with pytest.raises(expected):
+        raise error
+
+
+def test_unknown_attribute_raises():
+    with pytest.raises(AttributeError, match="no attribute 'Nope'"):
+        _ = sppyte.Nope
+    with pytest.raises(AttributeError, match="no attribute 'Nope'"):
+        _ = sppyte.errors.Nope
+
+
+def test_import_sppyte_does_not_warn():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        importlib.reload(sppyte)
+    assert [w for w in caught if issubclass(w.category, DeprecationWarning)] == []

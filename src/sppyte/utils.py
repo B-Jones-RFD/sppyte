@@ -1,17 +1,21 @@
 """Response-parsing helpers.
 
-Each `parse_*` function pulls one value out of a SharePoint JSON payload and
-raises `ResponseFormatError` if it is missing. URL helpers live in
+`parse_json` decodes a response body; each other `parse_*` function pulls one
+value out of the decoded payload. Both raise `ResponseFormatError` when the
+body is not in the expected shape. URL helpers live in
 `sppyte.odata` and are re-exported here for compatibility with 0.x.
 """
 
 from __future__ import annotations
 
 import warnings
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from sppyte.errors import ResponseFormatError
 from sppyte.odata import build_path, odata_literal, odata_path
+
+if TYPE_CHECKING:
+    from requests import Response
 
 __all__ = [
     "AddDocumentResponse",
@@ -26,8 +30,10 @@ __all__ = [
     "parse_add_item",
     "parse_context_info",
     "parse_created_item",
+    "parse_exists",
     "parse_form_digest",
     "parse_item_type",
+    "parse_json",
     "parse_object",
 ]
 
@@ -70,14 +76,39 @@ class ContextInfo(TypedDict):
 
 
 # ----------------------------- Parsers ----------------------------------------
-def parse_context_info(r: FormDigestResponse) -> ContextInfo:
-    """Extract the form digest and its lifetime.
+def parse_json(response: Response) -> Any:
+    """Decode a response body as JSON.
+
+    Raises:
+        ResponseFormatError: if the body is not JSON (for example an HTML login
+            page returned with status 200 by a proxy).
+    """
+    try:
+        return response.json()
+    except ValueError as e:  # requests.JSONDecodeError is a ValueError
+        msg = f"Response body is not JSON (Content-Type {response.headers.get('Content-Type')!r})"
+        raise ResponseFormatError(msg) from e
+
+
+def _required_str(r: Any, field: str, msg: str) -> str:
+    """Return the non-empty string `r[field]`, raising `ResponseFormatError(msg)` otherwise."""
+    if not isinstance(r, dict):
+        raise ResponseFormatError(msg)
+    value = r.get(field)
+    if not isinstance(value, str) or not value:
+        raise ResponseFormatError(msg)
+    return value
+
+
+def parse_context_info(r: Any) -> ContextInfo:
+    """Extract the form digest and its lifetime from a `FormDigestResponse`.
 
     Falls back to SharePoint's 30-minute default when the lifetime is missing
     or not a positive integer.
 
     Raises:
-        ResponseFormatError: if `FormDigestValue` is missing.
+        ResponseFormatError: if the body is not an object or `FormDigestValue`
+            is missing or not a non-empty string.
     """
     digest = parse_form_digest(r)
     timeout = r.get("FormDigestTimeoutSeconds")
@@ -86,30 +117,37 @@ def parse_context_info(r: FormDigestResponse) -> ContextInfo:
     return {"digest": digest, "timeout": timeout}
 
 
-def parse_form_digest(r: FormDigestResponse) -> str:
-    """Extract `FormDigestValue`.
+def parse_form_digest(r: Any) -> str:
+    """Extract `FormDigestValue` from a `FormDigestResponse`.
 
     Raises:
-        ResponseFormatError: if it is missing.
+        ResponseFormatError: if the body is not an object or the value is
+            missing or not a non-empty string.
     """
-    val = "Form digest value"
-    form_digest = r.get("FormDigestValue", val)
-    if form_digest == val:
-        raise ResponseFormatError(val)
-    return form_digest
+    return _required_str(r, "FormDigestValue", "Form digest value")
 
 
-def parse_item_type(r: ItemTypeResponse) -> str:
-    """Extract `ListItemEntityTypeFullName`.
+def parse_item_type(r: Any) -> str:
+    """Extract `ListItemEntityTypeFullName` from an `ItemTypeResponse`.
 
     Raises:
-        ResponseFormatError: if it is missing.
+        ResponseFormatError: if the body is not an object or the value is
+            missing or not a non-empty string.
     """
-    val = "List item type"
-    item_type = r.get("ListItemEntityTypeFullName", val)
-    if item_type == val:
-        raise ResponseFormatError(val)
-    return item_type
+    return _required_str(r, "ListItemEntityTypeFullName", "List item type")
+
+
+def parse_exists(r: Any) -> bool:
+    """Extract the boolean `value` of an `.../Exists` response.
+
+    Raises:
+        ResponseFormatError: if the body is not an object with a boolean `value`.
+    """
+    value = r.get("value") if isinstance(r, dict) else None
+    if not isinstance(value, bool):
+        msg = "Exists 'value'"
+        raise ResponseFormatError(msg)
+    return value
 
 
 def parse_created_item(r: Any) -> dict[str, Any]:
@@ -152,13 +190,13 @@ def parse_object(r: Any) -> dict[str, Any]:
 def parse_add_item(r: AddItemResponse) -> int:
     """Extract `ID` from an add-item response.
 
-    Deprecated: use `parse_created_item`, which returns the whole item.
+    Deprecated: use `parse_created_item`, which returns the whole item. Removed in 2.0.
 
     Raises:
         ResponseFormatError: if `ID` is missing.
     """
     warnings.warn(
-        "parse_add_item is deprecated; use parse_created_item",
+        "parse_add_item is deprecated and will be removed in sppyte 2.0; use parse_created_item",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -172,13 +210,13 @@ def parse_add_item(r: AddItemResponse) -> int:
 def parse_add_document(r: AddDocumentResponse) -> str:
     """Extract `UniqueId` from an add-document response.
 
-    Deprecated: use `parse_object`, which returns the whole `SP.File`.
+    Deprecated: use `parse_object`, which returns the whole `SP.File`. Removed in 2.0.
 
     Raises:
         ResponseFormatError: if `UniqueId` is missing.
     """
     warnings.warn(
-        "parse_add_document is deprecated; use parse_object",
+        "parse_add_document is deprecated and will be removed in sppyte 2.0; use parse_object",
         DeprecationWarning,
         stacklevel=2,
     )

@@ -2,6 +2,9 @@ import importlib
 import sys
 
 import pytest
+import requests
+import responses
+from requests import Response
 
 from sppyte import Library, List, Site
 from sppyte.errors import ResponseFormatError
@@ -14,10 +17,13 @@ from sppyte.utils import (
     parse_add_item,
     parse_context_info,
     parse_created_item,
+    parse_exists,
     parse_form_digest,
     parse_item_type,
+    parse_json,
     parse_object,
 )
+from tests.conftest import HOST
 
 
 # ------------------------- build_path ---------------------------------
@@ -107,10 +113,16 @@ def test_parse_form_digest_missing_raises():
         parse_form_digest({})
 
 
-def test_parse_form_digest_allows_empty_string():
-    # Present but empty is technically accepted by current implementation
-    r = {"FormDigestValue": ""}
-    assert parse_form_digest(r) == ""
+@pytest.mark.parametrize("value", ["", None, 123, ["abc"]])
+def test_parse_form_digest_wrong_type_raises(value):
+    with pytest.raises(ResponseFormatError, match="Form digest value"):
+        parse_form_digest({"FormDigestValue": value})
+
+
+@pytest.mark.parametrize("r", [[], ["abc"], "abc", None, 1])
+def test_parse_form_digest_non_object_raises(r):
+    with pytest.raises(ResponseFormatError):
+        parse_form_digest(r)
 
 
 # ------------------------- parse_item_type ----------------------------
@@ -124,9 +136,16 @@ def test_parse_item_type_missing_raises():
         parse_item_type({})
 
 
-def test_parse_item_type_allows_empty_string():
-    r = {"ListItemEntityTypeFullName": ""}
-    assert parse_item_type(r) == ""
+@pytest.mark.parametrize("value", ["", None, 1, {"x": 1}])
+def test_parse_item_type_wrong_type_raises(value):
+    with pytest.raises(ResponseFormatError, match="List item type"):
+        parse_item_type({"ListItemEntityTypeFullName": value})
+
+
+@pytest.mark.parametrize("r", [[], "SP.Data.TasksListItem", None])
+def test_parse_item_type_non_object_raises(r):
+    with pytest.raises(ResponseFormatError):
+        parse_item_type(r)
 
 
 # ------------------------- parse_add_item (deprecated) ----------------
@@ -163,9 +182,19 @@ def test_parse_add_document_allows_empty_string():
         assert parse_add_document({"UniqueId": ""}) == ""
 
 
+def test_parse_add_item_message_names_removing_major():
+    with pytest.warns(DeprecationWarning, match="parse_add_item is deprecated and will be removed in sppyte 2.0"):
+        parse_add_item({"ID": 1})
+
+
+def test_parse_add_document_message_names_removing_major():
+    with pytest.warns(DeprecationWarning, match="parse_add_document is deprecated and will be removed in sppyte 2.0"):
+        parse_add_document({"UniqueId": "f0e1d2c3"})
+
+
 def test_models_shim_warns():
     sys.modules.pop("sppyte.models", None)
-    with pytest.warns(DeprecationWarning, match="sppyte.models is deprecated"):
+    with pytest.warns(DeprecationWarning, match="sppyte.models is deprecated and will be removed in sppyte 2.0"):
         models = importlib.import_module("sppyte.models")
     assert models.Site is Site
     assert models.List is List
@@ -189,6 +218,46 @@ def test_parse_context_info_defaults_timeout(timeout):
 def test_parse_context_info_missing_digest_raises():
     with pytest.raises(Exception, match="Form digest value"):
         parse_context_info({"FormDigestTimeoutSeconds": 900})
+
+
+@pytest.mark.parametrize("r", [[], [{"FormDigestValue": "abc"}], "abc", None])
+def test_parse_context_info_non_object_raises(r):
+    with pytest.raises(ResponseFormatError):
+        parse_context_info(r)
+
+
+def test_parse_context_info_non_string_digest_raises():
+    with pytest.raises(ResponseFormatError, match="Form digest value"):
+        parse_context_info({"FormDigestValue": None, "FormDigestTimeoutSeconds": 900})
+
+
+# ------------------------- parse_json ------------------------------------
+def fetch(mocked, body: str, content_type: str) -> Response:
+    mocked.add(responses.GET, f"{HOST}/page", body=body, status=200, content_type=content_type)
+    return requests.get(f"{HOST}/page", timeout=5)
+
+
+def test_parse_json_decodes_body(mocked):
+    assert parse_json(fetch(mocked, '{"a": [1, 2]}', "application/json")) == {"a": [1, 2]}
+
+
+@pytest.mark.parametrize("body", ["<html><body>Sign in</body></html>", "", "{not json"])
+def test_parse_json_non_json_raises(mocked, body):
+    with pytest.raises(ResponseFormatError, match=r"not JSON.*text/html") as exc:
+        parse_json(fetch(mocked, body, "text/html"))
+    assert isinstance(exc.value.__cause__, ValueError)
+
+
+# ------------------------- parse_exists ----------------------------------
+@pytest.mark.parametrize("value", [True, False])
+def test_parse_exists_ok(value):
+    assert parse_exists({"value": value}) is value
+
+
+@pytest.mark.parametrize("r", [{}, {"value": None}, {"value": "true"}, {"value": 1}, [], None, "true", True])
+def test_parse_exists_invalid_raises(r):
+    with pytest.raises(ResponseFormatError):
+        parse_exists(r)
 
 
 # ------------------------- parse_created_item ---------------------------

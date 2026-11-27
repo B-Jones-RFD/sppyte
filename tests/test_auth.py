@@ -6,19 +6,22 @@ import base64
 import datetime
 import hashlib
 import io
+import warnings
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from requests import PreparedRequest, Request, Session
+from requests import PreparedRequest, Request, Response, Session
+from requests.adapters import BaseAdapter
 from requests.auth import AuthBase
+from requests.structures import CaseInsensitiveDict
 
-from sppyte import ConfigurationError, Site, SpPremAuth
+from sppyte import AuthError, ConfigurationError, Site, SpPremAuth
 from sppyte.auth import _extract_token, _pick_scheme, _rewind_body, certificate_hash
 from tests.conftest import BASE, HOST, SITE_REL
-from tests.fake_ntlm import MSG_AUTHENTICATE, FakeNtlmAdapter, message_type
+from tests.fake_ntlm import MSG_AUTHENTICATE, MSG_NEGOTIATE, FakeNtlmAdapter, make_challenge, message_type
 
 
 def _session(adapter: FakeNtlmAdapter, auth: AuthBase) -> Session:
@@ -38,10 +41,17 @@ def test_username_is_qualified_with_domain():
 
 
 def test_ntlm_requires_credentials():
-    with pytest.raises(ValueError, match="username and password"):
+    with pytest.raises(ConfigurationError, match="username and password"):
         SpPremAuth()
-    with pytest.raises(ValueError, match="username and password"):
+    with pytest.raises(ConfigurationError, match="username and password") as exc_info:
         SpPremAuth("jsmith")
+    assert isinstance(exc_info.value, ValueError)
+
+
+def test_ntlm_credential_error_hides_password():
+    with pytest.raises(ConfigurationError) as exc_info:
+        SpPremAuth(None, "hunter2")
+    assert "hunter2" not in str(exc_info.value)
 
 
 def test_negotiate_allows_sso():
@@ -52,8 +62,10 @@ def test_negotiate_allows_sso():
 
 
 def test_rejects_unknown_protocol():
-    with pytest.raises(ValueError, match="protocol must be one of"):
+    with pytest.raises(ConfigurationError, match="protocol must be one of") as exc_info:
         SpPremAuth("u", "p", protocol="basic")
+    assert isinstance(exc_info.value, ValueError)
+    assert "'basic'" in str(exc_info.value)
 
 
 def test_equality_and_repr_hide_password():
@@ -124,6 +136,80 @@ def test_no_second_attempt_when_already_authorized():
     assert len(server.calls) == 1
 
 
+def test_401_handshake_emits_no_warning():
+    server = FakeNtlmAdapter()
+    s = _session(server, SpPremAuth("u", "p"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = s.get(f"{BASE}/_api/web")
+    assert r.status_code == 200
+
+
+class _ProxyNtlmAdapter(BaseAdapter):
+    """Plays an NTLM-authenticating proxy: 407 + `Proxy-Authenticate` until a Type 3 token arrives."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[PreparedRequest] = []
+        self.authenticate_token: bytes | None = None
+
+    def send(self, request: PreparedRequest, *args, **kwargs) -> Response:
+        del args, kwargs
+        self.calls.append(request.copy())
+        auth = request.headers.get("Proxy-Authorization")
+        if isinstance(auth, bytes):
+            auth = auth.decode("ascii")
+        token = base64.b64decode(auth.partition(" ")[2]) if auth else b""
+        kind = message_type(token)
+        if kind == MSG_NEGOTIATE:
+            challenge = "NTLM " + base64.b64encode(make_challenge()).decode()
+            return self._response(request, 407, {"Proxy-Authenticate": challenge})
+        if kind == MSG_AUTHENTICATE:
+            self.authenticate_token = token
+            return self._response(request, 200, {"Content-Type": "application/json"}, b'{"ok": true}')
+        return self._response(request, 407, {"Proxy-Authenticate": "NTLM"})
+
+    def close(self) -> None:
+        return None
+
+    def _response(self, request: PreparedRequest, status: int, headers: dict[str, str], body: bytes = b"") -> Response:
+        r = Response()
+        r.status_code = status
+        r.headers = CaseInsensitiveDict(headers)
+        r.raw = _Raw(body)
+        r.url = request.url or ""
+        r.request = request
+        r.connection = self  # type: ignore[assignment]  # types-requests declares an HTTPAdapter; any BaseAdapter works
+        return r
+
+
+class _Raw(io.BytesIO):
+    def release_conn(self) -> None:
+        return None
+
+
+def test_proxy_407_handshake_is_deprecated():
+    proxy = _ProxyNtlmAdapter()
+    s = Session()
+    s.mount("https://", proxy)
+    s.auth = SpPremAuth("jsmith", "pw", domain="CONTOSO")
+
+    with pytest.warns(DeprecationWarning, match="2.0"):
+        r = s.get(f"{BASE}/_api/web")
+
+    assert r.status_code == 200, "the deprecated handshake still runs"
+    assert [c.headers.get("Proxy-Authorization", "")[:5] for c in proxy.calls] == ["", "NTLM ", "NTLM "]
+    assert proxy.authenticate_token is not None
+
+
+def test_proxy_407_warning_points_at_the_caller():
+    proxy = _ProxyNtlmAdapter()
+    first = proxy.send(Request("GET", f"{BASE}/_api/web").prepare())
+    with pytest.warns(DeprecationWarning, match="2.0") as record:
+        SpPremAuth("u", "p").handle_response(first)
+    assert record[0].filename == __file__
+
+
 # --------------------------------------------------------------- helpers ----
 def test_pick_scheme():
     assert _pick_scheme("NTLM", "ntlm") == "NTLM"
@@ -188,6 +274,59 @@ def test_certificate_hash_uses_signature_algorithm():
     assert certificate_hash(der) == hashlib.sha256(der).digest()
     der384 = _self_signed_der(hashes.SHA384())
     assert certificate_hash(der384) == hashlib.sha384(der384).digest()
+
+
+OTHER_HOST = "https://other.example.net"
+
+
+class _RedirectAdapter(BaseAdapter):
+    """Answers every request with a 302 to the same path on `OTHER_HOST`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[PreparedRequest] = []
+
+    def send(self, request: PreparedRequest, *args, **kwargs) -> Response:
+        del args, kwargs
+        self.calls.append(request.copy())
+        r = Response()
+        r.status_code = 302
+        r.reason = "Found"
+        r.headers = CaseInsensitiveDict({"Location": f"{OTHER_HOST}/_api/web"})
+        r.raw = io.BytesIO(b"")
+        r.url = request.url or ""
+        r.request = request
+        r.connection = self  # type: ignore[assignment]  # types-requests declares an HTTPAdapter; any BaseAdapter works
+        return r
+
+    def close(self) -> None:
+        return None
+
+
+def test_challenge_after_redirect_to_other_host_is_not_answered():
+    home = _RedirectAdapter()
+    other = FakeNtlmAdapter()
+    session = Session()
+    session.mount("https://", home)
+    session.mount(f"{OTHER_HOST}/", other)
+    site = Site(HOST, SITE_REL, "jsmith", "pw", domain="CONTOSO", session=session)
+
+    with pytest.raises(AuthError):
+        site.request("get", "_api/web")
+
+    assert len(home.calls) == 1
+    assert other.calls, "the redirect was followed"
+    assert all("Authorization" not in c.headers for c in other.calls)
+    assert other.authenticate_token is None
+
+
+def test_handle_response_without_origin_still_answers_challenge():
+    server = FakeNtlmAdapter()
+    auth = SpPremAuth("u", "p")
+    first = server.send(Request("GET", f"{BASE}/_api/web").prepare())
+    final = auth.handle_response(first)
+    assert final.status_code == 200
+    assert len(server.calls) == 3
 
 
 # ------------------------------------------------------------- via Site ----

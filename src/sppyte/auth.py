@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
+import warnings
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
@@ -27,6 +29,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from requests.auth import AuthBase
 from spnego.channel_bindings import GssChannelBindings
+
+from sppyte.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from requests import PreparedRequest, Response
@@ -55,6 +59,15 @@ class SpPremAuth(AuthBase):
         service: Service part of the Kerberos SPN; `"HTTP"` for SharePoint.
         send_cbt: Send TLS channel bindings (`tls-server-end-point`) over HTTPS, which
             servers with Extended Protection require. On by default; harmless otherwise.
+
+    The handler also answers a proxy's `407 Proxy Authentication Required` with
+    these credentials. That is deprecated: it emits a `DeprecationWarning` and is
+    removed in sppyte 2.0. Set proxy credentials on the `requests.Session` you
+    pass to `Site` instead.
+
+    Raises:
+        ConfigurationError: if `protocol` is not one of the supported protocols, or
+            `protocol="ntlm"` is given without a username and password.
     """
 
     def __init__(
@@ -69,10 +82,10 @@ class SpPremAuth(AuthBase):
     ):
         if protocol not in _HEADER_NAMES:
             msg = f"protocol must be one of {sorted(_HEADER_NAMES)} (got {protocol!r})"
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
         if protocol == "ntlm" and (not username or password is None):
             msg = "NTLM needs a username and password; use protocol='negotiate' for single sign-on"
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
         self.username = f"{domain}\\{username}" if domain and username and "\\" not in username else username
         self.password = password
         self.protocol: Protocol = protocol
@@ -95,17 +108,49 @@ class SpPremAuth(AuthBase):
         return hash((self.username, self.protocol, self.service, self.send_cbt))
 
     def __call__(self, request: PreparedRequest) -> PreparedRequest:
-        """Attach the response hook that performs the handshake on a 401."""
+        """Attach the response hook that performs the handshake on a 401 from this request's origin.
+
+        `requests` copies hooks onto the request it sends for a redirect, so the
+        origin is bound here, from the request the handler was first applied to.
+        """
         request.headers["Connection"] = "Keep-Alive"
-        request.register_hook("response", self.handle_response)
+        request.register_hook("response", functools.partial(self.handle_response, origin=_origin(request.url)))
         return request
 
     # ------------------------------------------------------------ handshake ----
-    def handle_response(self, response: Response, **kwargs: Any) -> Response:
-        """Complete the handshake when the server challenges with 401 or 407."""
+    def handle_response(self, response: Response, *, origin: tuple[str, str] | None = None, **kwargs: Any) -> Response:
+        """Complete the handshake when the server challenges with 401 or 407.
+
+        A challenge from another origin than the one the request was first sent to
+        (a redirect to another host) is returned unanswered, so credentials never
+        leave the configured host.
+
+        Answering a proxy's 407 is deprecated and removed in sppyte 2.0: it still
+        runs the handshake, but emits a `DeprecationWarning` first. Configure proxy
+        credentials on the session instead.
+
+        Args:
+            response: The response to inspect.
+            origin: `(scheme, netloc)` of the request the handler was attached to;
+                `None` skips the same-origin check.
+            **kwargs: Send options, reused for the handshake legs.
+
+        Returns:
+            The final response of the handshake, or `response` unchanged.
+        """
+        if origin is not None and _origin(response.url) != origin:
+            return response
         if response.status_code == UNAUTHORIZED:
             return self._authenticate(response, "www-authenticate", "Authorization", kwargs)
         if response.status_code == PROXY_AUTH_REQUIRED:
+            # The proxy is a different host from the one the Site was created for, so sending it
+            # the SharePoint credentials breaks the rule that credentials go only to that host.
+            warnings.warn(
+                "Answering a proxy's 407 with the SharePoint credentials is deprecated and will be "
+                "removed in sppyte 2.0; configure proxy credentials on the session instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             return self._authenticate(response, "proxy-authenticate", "Proxy-Authorization", kwargs)
         return response
 
@@ -211,6 +256,12 @@ def _extract_token(header: str, scheme: str) -> bytes | None:
 def _hostname(url: str) -> str:
     """Return the host name part of `url`, for the Kerberos SPN."""
     return urlsplit(url).hostname or "unspecified"
+
+
+def _origin(url: str | None) -> tuple[str, str]:
+    """Return `(scheme, netloc)` of `url`, lower-cased, for the same-origin check."""
+    parts = urlsplit(url or "")
+    return parts.scheme.lower(), parts.netloc.lower()
 
 
 def _rewind_body(request: PreparedRequest) -> None:

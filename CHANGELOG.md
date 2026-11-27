@@ -11,11 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `SECURITY.md`: supported versions, private vulnerability reporting, and how sppyte handles
   credentials, hosts, TLS and files.
+- `sppyte.utils.parse_json` and `parse_exists`.
 
 ### Changed
 
 - Python 3.10 is no longer supported (it reached end of life); the minimum is now 3.11.
   Python 3.15 is tested and declared. The PyPy classifier is removed, since CI does not test PyPy.
+- `Site` now rejects invalid `timeout`, `retry`, `verify`, `cert` and `session` values with
+  `ConfigurationError` at construction. Previously an invalid `retry` silently turned retry off,
+  and the others failed on the first request.
+- `SpPremAuth`, `List.iter_query` and `Batch.add` raise `ConfigurationError` (still a `ValueError`)
+  for bad arguments.
+- `List.iter_pages` and `Library.iter_pages` are lazy: the first request is sent on first
+  iteration, so errors are raised there rather than at the call.
+
+### Deprecated
+
+- Answering a proxy's `407` with the SharePoint credentials. It now emits a `DeprecationWarning`
+  and will be removed in 2.0; set proxy credentials on a `requests.Session` you pass to `Site`
+  instead.
+- `SessionError` now emits a `DeprecationWarning` when used. `sppyte.models`, `parse_add_item`,
+  `parse_add_document` and `SessionError` will be removed in 2.0.
+
+### Fixed
+
+- A 2xx response whose body is not JSON, or not in the expected shape, now raises
+  `ResponseFormatError` instead of `JSONDecodeError` or `AttributeError`, or returning the body
+  as is (`List.get_item`, `Library.folder_exists`). An empty form digest or list item type is
+  also rejected.
+- A write sent with `files=` is no longer re-sent with a consumed body after a digest refresh.
+- `Library.download` no longer empties the destination file when the download fails with an HTTP
+  error, and expands `~` in a destination path.
+- Concurrent first requests share one HTTP session, and concurrent first writes to a list share one
+  item-type lookup.
+
+### Security
+
+- The NTLM/Kerberos handshake is no longer answered for a host that a redirect leads to;
+  credentials are sent only to the configured host.
 
 ## [1.1.1] - 2026-10-23
 

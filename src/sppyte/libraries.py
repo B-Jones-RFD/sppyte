@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 
 from sppyte.odata import JSON_NOMETADATA, Page, Params, build_path, follow_pages, odata_literal, odata_path, parse_page
-from sppyte.utils import parse_object
+from sppyte.utils import parse_exists, parse_json, parse_object
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -67,13 +67,16 @@ class Library:
         """Return whether a folder path exists beneath this library.
 
         A missing folder is `False`, not an error.
+
+        Raises:
+            ResponseFormatError: if the response is not JSON with a boolean `value`.
         """
         r = self.site.request(
             "get",
             f"{self.folder_path(folder, *subfolders)}/Exists",
             headers={"Accept": JSON_NOMETADATA},
         )
-        return r.json().get("value", False)
+        return parse_exists(parse_json(r))
 
     def _collection(self, kind: str, subfolders: tuple[str, ...], params: Params) -> Page:
         """Fetch the `Files` or `Folders` collection of a folder as a `Page`."""
@@ -83,7 +86,7 @@ class Library:
             headers={"Accept": JSON_NOMETADATA},
             params=params,
         )
-        return parse_page(r.json())
+        return parse_page(parse_json(r))
 
     def list_contents(self, *subfolders: str, params: Params = None) -> Page:
         """List the files directly inside a folder (subfolders are not included).
@@ -95,6 +98,9 @@ class Library:
         Args:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options such as `$select`, `$top`, `$filter`.
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON collection.
 
         Example:
             `docs.list_contents("Reports", "2025", params={"$select": "Name"})`
@@ -110,18 +116,23 @@ class Library:
         Args:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options such as `$select`, `$top`, `$filter`.
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON collection.
         """
         return self._collection("Folders", subfolders, params)
 
     def iter_pages(self, *subfolders: str, params: Params = None, max_pages: int | None = None) -> Iterator[Page]:
         """Yield each page of files in a folder, following `next_link`.
 
+        Lazy: no request is sent until the first page is requested.
+
         Args:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
         """
-        return follow_pages(self.list_contents(*subfolders, params=params), self.site.get_page, max_pages)
+        yield from follow_pages(self.list_contents(*subfolders, params=params), self.site.get_page, max_pages)
 
     def iter_files(
         self, *subfolders: str, params: Params = None, max_pages: int | None = None
@@ -187,8 +198,11 @@ class Library:
     ) -> int:
         """Stream a file to a path or a binary file object.
 
-        A path is created or overwritten; a file object is written at its
-        current position and left open.
+        A path (with `~` expanded) is created or overwritten; a file object is
+        written at its current position and left open. The request is sent and
+        its status checked before `dest` is opened, so an HTTP error leaves
+        `dest` untouched and creates no file. A failure while the body is
+        streaming, such as a dropped connection, may leave a partial file.
 
         Args:
             file_name: File name, including extension.
@@ -199,14 +213,19 @@ class Library:
         Returns:
             The number of bytes written.
 
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+
         Example:
             `docs.download("report.pdf", "~/report.pdf", "Reports")`
         """
-        chunks = self.iter_document(file_name, *subfolders, chunk_size=chunk_size)
-        if isinstance(dest, str | os.PathLike):
-            with Path(dest).open("wb") as fh:
-                return _write_all(fh, chunks)
-        return _write_all(dest, chunks)
+        with self._open_document(file_name, subfolders) as r:
+            chunks = r.iter_content(chunk_size=chunk_size)
+            if isinstance(dest, str | os.PathLike):
+                with Path(dest).expanduser().open("wb") as fh:
+                    return _write_all(fh, chunks)
+            return _write_all(dest, chunks)
 
     # -------------------------------------------------------------- writes ----
     def add_folder(self, folder: str, *subfolders: str, digest: str | None = None) -> dict[str, Any]:
@@ -222,6 +241,9 @@ class Library:
 
         Returns:
             The `SP.Folder` object (`Name`, `ServerRelativeUrl`, `UniqueId`, `Exists`, ...).
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON object.
         """
         r = self.site.request(
             "post",
@@ -230,7 +252,7 @@ class Library:
             json={"ServerRelativeUrl": self.server_relative_url(folder, *subfolders)},
             digest=digest or True,
         )
-        return parse_object(r.json())
+        return parse_object(parse_json(r))
 
     def add_document(
         self,
@@ -256,6 +278,9 @@ class Library:
         Returns:
             The `SP.File` object SharePoint created (`Name`, `ServerRelativeUrl`,
             `UniqueId`, `Length`, ...).
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON object.
         """
         flag = "true" if overwrite else "false"
         path = f"{self.folder_path(*subfolders)}/Files/add(url='{odata_literal(file_name)}',overwrite={flag})"
@@ -265,7 +290,7 @@ class Library:
                 r = self.site.request("post", path, headers=headers, data=fh, digest=digest or True)
         else:
             r = self.site.request("post", path, headers=headers, data=document, digest=digest or True)
-        return parse_object(r.json())
+        return parse_object(parse_json(r))
 
     def delete_document(self, file_name: str, *subfolders: str, digest: str | None = None) -> bool:
         """Delete a document by name within an optional nested folder path.

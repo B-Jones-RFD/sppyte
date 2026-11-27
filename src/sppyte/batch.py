@@ -146,12 +146,11 @@ class Batch:
             This batch, so calls can be chained.
 
         Raises:
-            ValueError: if both `json` and `body` are given.
-            ConfigurationError: if an absolute `path` is not on the site's host.
+            ConfigurationError: if both `json` and `body` are given, or an absolute `path` is not on the site's host.
         """
         if json is not None and body is not None:
             msg = "pass either json or body, not both"
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
         url = self._resolve(path, params)
         payload = jsonlib.dumps(json) if json is not None else body
         self.requests.append(BatchRequest(method.upper(), url, dict(headers or {}), payload))

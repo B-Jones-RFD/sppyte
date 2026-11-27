@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import IO, TYPE_CHECKING, Any
 
-from sppyte.errors import ResponseFormatError
+from sppyte.errors import ConfigurationError, ResponseFormatError
 from sppyte.odata import JSON_NOMETADATA, JSON_VERBOSE, Page, Params, follow_pages, odata_literal, parse_page
-from sppyte.utils import parse_created_item, parse_item_type, parse_object
+from sppyte.utils import parse_created_item, parse_item_type, parse_json, parse_object
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -32,6 +33,7 @@ class List:
         self.site = site
         self.name = name
         self._item_type: str | None = None
+        self._lock = threading.Lock()
 
     def __repr__(self) -> str:
         return f"List({self.name!r}, {self.site!r})"
@@ -50,22 +52,37 @@ class List:
     def item_type(self) -> str:
         """The list's `ListItemEntityTypeFullName`, e.g. `SP.Data.TasksListItem`.
 
-        Fetched once and cached for the lifetime of this object.
+        Fetched once and cached for the lifetime of this object. Concurrent
+        callers share one fetch.
         """
-        if self._item_type is None:
-            self._item_type = self.get_item_type()
-        return self._item_type
+        item_type = self._item_type
+        if item_type is not None:
+            return item_type
+        with self._lock:
+            item_type = self._item_type
+            if item_type is None:
+                item_type = self._item_type = self._fetch_item_type()
+            return item_type
 
     def get_item_type(self) -> str:
-        """Fetch `ListItemEntityTypeFullName` from SharePoint and refresh the cache."""
+        """Fetch `ListItemEntityTypeFullName` from SharePoint and refresh the cache.
+
+        Raises:
+            ResponseFormatError: if the response is not JSON or has no item type.
+        """
+        with self._lock:
+            self._item_type = self._fetch_item_type()
+            return self._item_type
+
+    def _fetch_item_type(self) -> str:
+        """Request `ListItemEntityTypeFullName`; the caller holds `self._lock`."""
         r = self.site.request(
             "get",
             self.path,
             headers={"Accept": JSON_NOMETADATA},
             params={"$select": "ListItemEntityTypeFullName"},
         )
-        self._item_type = parse_item_type(r.json())
-        return self._item_type
+        return parse_item_type(parse_json(r))
 
     def _with_metadata(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Return a copy of `fields` with `__metadata.type` added unless already present."""
@@ -84,6 +101,9 @@ class List:
 
         Args:
             params: OData options, e.g. `{"$select": "Id,Title", "$top": 5}`.
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON collection.
         """
         r = self.site.request(
             "get",
@@ -91,16 +111,18 @@ class List:
             headers={"Accept": JSON_NOMETADATA},
             params=params,
         )
-        return parse_page(r.json())
+        return parse_page(parse_json(r))
 
     def iter_pages(self, params: Params = None, *, max_pages: int | None = None) -> Iterator[Page]:
         """Yield each page of items, following `next_link` until exhausted or `max_pages`.
+
+        Lazy: no request is sent until the first page is requested.
 
         Args:
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
         """
-        return follow_pages(self.get_contents(params), self.site.get_page, max_pages)
+        yield from follow_pages(self.get_contents(params), self.site.get_page, max_pages)
 
     def iter_items(self, params: Params = None, *, max_pages: int | None = None) -> Iterator[dict[str, Any]]:
         """Yield every item across all pages, one request per page.
@@ -125,13 +147,17 @@ class List:
         return list(self.iter_items(params, max_pages=max_pages))
 
     def get_item(self, sp_id: int) -> dict[str, Any]:
-        """Fetch a single list item by its SharePoint `Id`."""
+        """Fetch a single list item by its SharePoint `Id`.
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON object.
+        """
         r = self.site.request(
             "get",
             f"{self.path}/items('{sp_id}')",
             headers={"Accept": JSON_NOMETADATA},
         )
-        return r.json()
+        return parse_object(parse_json(r))
 
     # ---------------------------------------------------------------- CAML ----
     def query(
@@ -156,6 +182,9 @@ class List:
             params: OData options such as `$select` / `$expand` (`$filter` and `$top`
                 belong in the CAML).
             digest: Form digest to send instead of the managed one (`GetItems` is a POST).
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON collection.
         """
         query: dict[str, Any] = {"__metadata": {"type": "SP.CamlQuery"}, "ViewXml": view_xml}
         if paging_info is not None:
@@ -169,7 +198,7 @@ class List:
             digest=digest or True,
             retry=True,  # GetItems is a POST but idempotent, so the read policy applies
         )
-        return parse_page(r.json())
+        return parse_page(parse_json(r))
 
     def iter_query(
         self,
@@ -193,13 +222,14 @@ class List:
             digest: Form digest to send instead of the managed one.
 
         Raises:
-            ValueError: if `view_xml` has no `<RowLimit>`.
-            ResponseFormatError: if a page's last item has no integer `Id`.
+            ConfigurationError: if `view_xml` has no `<RowLimit>`.
+            ResponseFormatError: if a page is not a JSON collection or its last item has
+                no integer `Id`.
         """
         match = _ROW_LIMIT_RE.search(view_xml)
         if not match:
-            msg = "iter_query needs a <RowLimit> in view_xml to page"
-            raise ValueError(msg)
+            msg = f"iter_query needs a <RowLimit> in view_xml to page (got view_xml={view_xml[:80]!r})"
+            raise ConfigurationError(msg)
         row_limit = int(match.group(1))
         paging_info: str | None = None
         count = 0
@@ -231,6 +261,11 @@ class List:
             params: OData options such as `$select` / `$expand`.
             max_pages: Stop after this many pages; `None` for no limit.
             digest: Form digest to send instead of the managed one.
+
+        Raises:
+            ConfigurationError: if `view_xml` has no `<RowLimit>`.
+            ResponseFormatError: if a page is not a JSON collection or its last item has
+                no integer `Id`.
         """
         return list(self.iter_query(view_xml, params=params, max_pages=max_pages, digest=digest))
 
@@ -244,6 +279,9 @@ class List:
         Args:
             item: Field values for the new item.
             digest: Form digest to send instead of the managed one.
+
+        Raises:
+            ResponseFormatError: if the response is not JSON or has no integer `Id`.
         """
         r = self.site.request(
             "post",
@@ -252,7 +290,7 @@ class List:
             json=self._with_metadata(item),
             digest=digest or True,
         )
-        return parse_created_item(r.json())
+        return parse_created_item(parse_json(r))
 
     def update_item(self, sp_id: int, patch: Mapping[str, Any], *, digest: str | None = None) -> int:
         """Merge-update a list item (OData MERGE; fields you omit are untouched).
@@ -323,6 +361,9 @@ class List:
 
         Returns:
             The `SP.Attachment` object SharePoint created (`FileName`, `ServerRelativeUrl`).
+
+        Raises:
+            ResponseFormatError: if the response is not a JSON object.
         """
         r = self.site.request(
             "post",
@@ -331,4 +372,4 @@ class List:
             data=attachment,
             digest=digest or True,
         )
-        return parse_object(r.json())
+        return parse_object(parse_json(r))

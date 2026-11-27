@@ -177,8 +177,9 @@ def test_batch_add_serialises_json_and_rejects_both_bodies(site):
         ("DELETE", None),
     ]
     assert b.requests[1].headers == {"If-Match": '"2"'}
-    with pytest.raises(ValueError, match="either json or body"):
+    with pytest.raises(ConfigurationError, match="either json or body") as exc_info:
         b.add("POST", "_api/w", json={}, body="{}")
+    assert isinstance(exc_info.value, ValueError)
 
 
 def test_empty_batch_sends_nothing(site, mocked):

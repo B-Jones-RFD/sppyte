@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import io
+import re
+import threading
 
 import pytest
 import responses
 from requests import HTTPError, Session
 
-from sppyte import AuthError, ConfigurationError, SharePointError, Site
+from sppyte import AuthError, ConfigurationError, ResponseFormatError, RetryOptions, SharePointError, Site
 from sppyte.site import _rewinder
 from tests.conftest import ANY_URL, BASE, CONTEXTINFO, DIGEST, HOST, SITE_REL, add_contextinfo
 
@@ -56,6 +58,87 @@ def test_rejects_empty_username():
         Site(HOST, SITE_REL, "", "p")
 
 
+@pytest.mark.parametrize(
+    ("host", "rel", "option", "value"),
+    [(None, SITE_REL, "host", None), ("", SITE_REL, "host", ""), (HOST, 42, "site_relative_url", 42)],
+)
+def test_location_type_errors_name_the_value(host, rel, option, value):
+    with pytest.raises(ConfigurationError, match=rf"^{option} .*\(got {re.escape(repr(value))}\)"):
+        Site(host, rel, "u", "p")
+
+
+def _assert_rejected(option, value):
+    with pytest.raises(ConfigurationError, match=rf"^{option} .*\(got {re.escape(repr(value))}\)") as exc:
+        Site(HOST, SITE_REL, "u", "secret", **{option: value})
+    assert "secret" not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["30", 0, -1, -0.5, True, False, (5,), (5, 60, 90), (5, "60"), (0, 60), (True, 60), (5, None), [5, 60]],
+)
+def test_rejects_invalid_timeout(value):
+    _assert_rejected("timeout", value)
+
+
+@pytest.mark.parametrize("value", ["yes", 1, 0, {"retries": 3}, RetryOptions])
+def test_rejects_invalid_retry(value):
+    _assert_rejected("retry", value)
+
+
+@pytest.mark.parametrize("value", [1, 0, b"/etc/ca.pem", ["/etc/ca.pem"]])
+def test_rejects_invalid_verify(value):
+    _assert_rejected("verify", value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [1, True, b"c.pem", ("c.pem",), ("c.pem", "k.pem", "x"), ("c.pem", None), ["c.pem", "k.pem"]],
+)
+def test_rejects_invalid_cert(value):
+    _assert_rejected("cert", value)
+
+
+@pytest.mark.parametrize("value", ["session", object(), {}])
+def test_rejects_invalid_session(value):
+    _assert_rejected("session", value)
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "expected"),
+    [
+        ("timeout", None, None),
+        ("timeout", 10, 10),
+        ("timeout", 2.5, 2.5),
+        ("timeout", (5, 60), (5, 60)),
+        ("timeout", (3.05, 27.0), (3.05, 27.0)),
+        ("verify", None, None),
+        ("verify", True, True),
+        ("verify", False, False),
+        ("verify", "/etc/corp-ca.pem", "/etc/corp-ca.pem"),
+        ("cert", None, None),
+        ("cert", "client.pem", "client.pem"),
+        ("cert", ("c.pem", "k.pem"), ("c.pem", "k.pem")),
+        ("retry", None, None),
+        ("retry", False, None),
+        ("retry", True, RetryOptions()),
+        ("retry", RetryOptions(retries=1), RetryOptions(retries=1)),
+    ],
+)
+def test_valid_options_construct_without_io(mocked, option, value, expected):
+    s = Site(HOST, SITE_REL, "u", "p", **{option: value})
+    assert getattr(s, option) == expected
+    assert len(mocked.calls) == 0
+
+
+def test_valid_session_constructs_without_io(mocked):
+    session = Session()
+    s = Site(HOST, SITE_REL, "u", "p", session=session)
+    assert s.session is session
+    assert Site(HOST, SITE_REL, "u", "p", session=None).session is None
+    assert len(mocked.calls) == 0
+
+
 def test_repr_hides_password():
     s = Site(HOST, SITE_REL, "u", "secret")
     assert "secret" not in repr(s)
@@ -86,6 +169,34 @@ def test_connect_fetches_form_digest(site, mocked):
     assert call.request.headers["Content-Type"] == "application/json;odata=verbose"
 
 
+def test_connect_raises_on_html_contextinfo(mocked):
+    mocked.add(
+        responses.POST,
+        CONTEXTINFO,
+        body="<html><body>Sign in</body></html>",
+        status=200,
+        content_type="text/html",
+    )
+    s = Site(HOST, SITE_REL, "u", "p")
+    with pytest.raises(ResponseFormatError, match="text/html"):
+        s.connect()
+    assert s.form_digest is None
+
+
+@pytest.mark.parametrize("payload", [[], ["0xDIGEST"], "0xDIGEST", {"FormDigestValue": None}])
+def test_connect_raises_on_malformed_contextinfo(mocked, payload):
+    mocked.add(responses.POST, CONTEXTINFO, json=payload)
+    s = Site(HOST, SITE_REL, "u", "p")
+    with pytest.raises(ResponseFormatError):
+        s.connect()
+
+
+def test_get_page_non_json_raises(site, mocked):
+    mocked.add(responses.GET, ANY_URL, body="<html></html>", status=200, content_type="text/html")
+    with pytest.raises(ResponseFormatError, match="not JSON"):
+        site.get_page(f"{BASE}/_api/web/lists/GetByTitle('Pets')/items?$skiptoken=x")
+
+
 def test_context_manager_connects_and_closes(mocked):
     add_contextinfo(mocked)
     with Site(HOST, SITE_REL, "u", "p") as s:
@@ -104,6 +215,40 @@ def test_close_keeps_user_session(mocked):
     assert s.session is session
     s.close()
     assert s.session is session
+
+
+def test_concurrent_first_requests_share_one_session(mocked, monkeypatch):
+    created: list[Session] = []
+
+    class CountingSession(Session):
+        def __init__(self) -> None:
+            super().__init__()
+            created.append(self)
+
+    monkeypatch.setattr("sppyte.site.Session", CountingSession)
+    mocked.add(responses.GET, WEB, json={})
+    s = Site(HOST, SITE_REL, "u", "p")
+    workers = 8
+    barrier = threading.Barrier(workers)
+    errors: list[BaseException] = []
+
+    def first_request() -> None:
+        try:
+            barrier.wait(timeout=5)
+            s.request("get", "/_api/web")
+        except BaseException as e:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(e)
+
+    threads = [threading.Thread(target=first_request) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert not any(t.is_alive() for t in threads)
+    assert errors == []
+    assert len(created) == 1
+    assert s.session is created[0]
+    assert len(mocked.calls) == workers
 
 
 def test_ntlm_principal_includes_domain():
@@ -336,6 +481,50 @@ def test_non_seekable_stream_is_not_retried(site, mocked):
     assert [c.request.url for c in mocked.calls] == [CONTEXTINFO, WEB]
 
 
+class _ReadOnlyStream:
+    """A file-like object that can be read but not rewound."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            size = len(self._data)
+        data, self._data = self._data[:size], self._data[size:]
+        return data
+
+
+def test_seekable_files_are_resent_in_full_after_refresh(site, mocked):
+    mocked.add(responses.POST, WEB, status=403)
+    add_contextinfo(mocked, digest="fresh")
+    mocked.add(responses.POST, WEB, json={})
+    site.request("post", "/_api/web", digest=True, files={"f": io.BytesIO(b"abc-payload")})
+    posts = [c for c in mocked.calls if c.request.method == "POST" and c.request.url == WEB]
+    assert len(posts) == 2
+    assert posts[1].request.headers["X-RequestDigest"] == "fresh"
+    assert b"abc-payload" in posts[0].request.body
+    assert b"abc-payload" in posts[1].request.body, "the resend must carry the whole file again"
+    assert len(posts[1].request.body) == len(posts[0].request.body)
+
+
+def test_files_tuple_value_is_rewound_after_refresh(site, mocked):
+    mocked.add(responses.POST, WEB, status=403)
+    add_contextinfo(mocked, digest="fresh")
+    mocked.add(responses.POST, WEB, json={})
+    files = [("f", ("a.txt", io.BytesIO(b"tuple-body"), "text/plain"))]
+    site.request("post", "/_api/web", digest=True, files=files)
+    posts = [c for c in mocked.calls if c.request.method == "POST" and c.request.url == WEB]
+    assert len(posts) == 2
+    assert b"tuple-body" in posts[1].request.body
+
+
+def test_non_seekable_file_is_not_retried(site, mocked):
+    mocked.add(responses.POST, WEB, status=403)
+    with pytest.raises(AuthError):
+        site.request("post", "/_api/web", digest=True, files={"f": _ReadOnlyStream(b"abc")})
+    assert [c.request.url for c in mocked.calls] == [CONTEXTINFO, WEB]
+
+
 def test_404_during_write_is_not_retried(site, mocked):
     mocked.add(responses.POST, WEB, status=404)
     with pytest.raises(SharePointError) as info:
@@ -361,6 +550,54 @@ def test_rewinder_seekable_restores_position():
 
 def test_rewinder_rejects_generator():
     assert _rewinder(iter([b"a"])) is None
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        None,
+        {},
+        {"f": b"bytes"},
+        {"f": "text"},
+        {"f": ("a.txt", b"bytes")},
+        {"f": ("a.txt", None)},
+        [("f", io.BytesIO(b"x")), ("g", ("b.txt", io.BytesIO(b"y"), "text/plain", {"X-A": "1"}))],
+    ],
+)
+def test_rewinder_accepts_resendable_files(files):
+    assert _rewinder(None, files) is not None
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"f": _ReadOnlyStream(b"x")},
+        {"f": ("a.txt", _ReadOnlyStream(b"x"))},
+        {"f": iter([b"a"])},
+        [("ok", b"x"), ("bad", _ReadOnlyStream(b"y"))],
+        iter([("f", b"x")]),
+    ],
+)
+def test_rewinder_rejects_files_that_cannot_be_resent(files):
+    assert _rewinder(None, files) is None
+
+
+def test_rewinder_restores_every_file_and_data_position():
+    data = io.BytesIO(b"0123456789")
+    data.seek(2)
+    first = io.BytesIO(b"abcdef")
+    second = io.BytesIO(b"uvwxyz")
+    second.seek(4)
+    rewind = _rewinder(data, {"a": first, "b": ("b.txt", second)})
+    assert rewind is not None
+    for fh in (data, first, second):
+        fh.read()
+    rewind()
+    assert (data.tell(), first.tell(), second.tell()) == (2, 0, 4)
+
+
+def test_rewinder_rejects_non_seekable_data_even_with_seekable_files():
+    assert _rewinder(_ReadOnlyStream(b"x"), {"f": io.BytesIO(b"y")}) is None
 
 
 # ------------------------------------------------------------ get_page ----

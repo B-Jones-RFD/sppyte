@@ -1,8 +1,10 @@
-"""Compatibility shim for 0.x imports; deprecated.
+"""Compatibility shim for 0.x imports; deprecated, removed in 2.0.
 
 `Site`, `List` and `Library` now live in `sppyte.site`, `sppyte.lists` and
 `sppyte.libraries`. Import them from `sppyte` directly.
 """
+
+from __future__ import annotations
 
 import warnings
 
@@ -14,7 +16,7 @@ from sppyte.site import Site
 __all__ = ["Library", "List", "Page", "ParamValue", "Params", "Site"]
 
 warnings.warn(
-    "sppyte.models is deprecated; import Site, List and Library from sppyte",
+    "sppyte.models is deprecated and will be removed in sppyte 2.0; import Site, List and Library from sppyte",
     DeprecationWarning,
     stacklevel=2,
 )
