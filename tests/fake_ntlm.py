@@ -6,7 +6,8 @@ gets 401 + a canned Type 2 (CHALLENGE); a Type 3 (AUTHENTICATE) token is
 accepted without verification and answered with 200. Every request is recorded.
 
 Options turn the fake into a server that rejects the credentials (`accept=False`)
-or answers the opening token without a challenge token (`challenge=False`).
+or answers the opening token without a challenge token (`challenge=False`) or with a
+challenge of its choosing (`challenge_header=`), such as one that is not base64 or not NTLM.
 `FakeNegotiateAdapter` plays a Kerberos server that accepts the first token,
 `FakeProxyAdapter` an NTLM-authenticating proxy, and `RedirectAdapter` a server
 that redirects every request elsewhere.
@@ -126,6 +127,7 @@ class FakeNtlmAdapter(BaseAdapter):
         body: bytes = b'{"ok": true}',
         accept: bool = True,
         challenge: bool = True,
+        challenge_header: str | None = None,
     ):
         """Configure the fake server.
 
@@ -137,6 +139,8 @@ class FakeNtlmAdapter(BaseAdapter):
                 as a server does for a wrong password.
             challenge: `False` answers the NEGOTIATE token with 401 + a bare `WWW-Authenticate: NTLM`
                 that carries no challenge token.
+            challenge_header: `WWW-Authenticate` value sent instead of the real challenge in answer
+                to the NEGOTIATE token, for example `NTLM !!!notbase64!!!`.
         """
         super().__init__()
         self.schemes = schemes
@@ -144,6 +148,7 @@ class FakeNtlmAdapter(BaseAdapter):
         self.body = body
         self.accept = accept
         self.challenge = challenge
+        self.challenge_header = challenge_header
         self.calls: list[PreparedRequest] = []
         self.authenticate_token: bytes | None = None
 
@@ -174,6 +179,8 @@ class FakeNtlmAdapter(BaseAdapter):
         if kind == MSG_NEGOTIATE:
             if not self.challenge:
                 return self._response(request, 401, {"WWW-Authenticate": "NTLM"})
+            if self.challenge_header is not None:
+                return self._response(request, 401, {"WWW-Authenticate": self.challenge_header})
             headers = {"WWW-Authenticate": "NTLM " + base64.b64encode(make_challenge()).decode()}
             if self.set_cookie:
                 headers["Set-Cookie"] = self.set_cookie

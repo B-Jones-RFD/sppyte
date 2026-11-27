@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import functools
+import struct
 import warnings
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -29,8 +30,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from requests.auth import AuthBase
 from spnego.channel_bindings import GssChannelBindings
+from spnego.exceptions import SpnegoError
 
-from sppyte.errors import ConfigurationError
+from sppyte.errors import AuthError, ConfigurationError
 
 if TYPE_CHECKING:
     from requests import PreparedRequest, Response
@@ -43,6 +45,12 @@ PROXY_AUTH_REQUIRED = 407
 
 _HEADER_NAMES: dict[str, str] = {"ntlm": "NTLM", "negotiate": "Negotiate", "kerberos": "Negotiate"}
 _WEAK_HASHES = frozenset({"md5", "sha1"})
+
+# pyspnego raises `SpnegoError` when it cannot build or step a context (for example no credentials
+# for single sign-on), but its pure-Python NTLM parser lets `ValueError`, `KeyError` and `struct.error`
+# out for a malformed challenge. `binascii.Error`, from decoding a challenge that is not base64, is a
+# `ValueError`.
+_HANDSHAKE_ERRORS: tuple[type[Exception], ...] = (SpnegoError, ValueError, KeyError, struct.error)
 
 
 class SpPremAuth(AuthBase):
@@ -139,9 +147,10 @@ class SpPremAuth(AuthBase):
             The final response of the handshake, or `response` unchanged.
 
         Raises:
-            spnego.exceptions.SpnegoError: if pyspnego cannot build or step the security context,
-                for example a malformed server challenge or no usable Kerberos credentials.
-            binascii.Error: if the server's challenge token is not valid base64.
+            AuthError: if the handshake cannot complete, for example a malformed or non-base64
+                server challenge, or single sign-on with no usable Kerberos credentials. Its
+                `status` and `response` are those of the 401/407 being answered, and pyspnego's
+                (or `binascii`'s) error is its `__cause__`.
         """
         if origin is not None and _origin(response.url) != origin:
             return response
@@ -166,27 +175,50 @@ class SpPremAuth(AuthBase):
         auth_header: str,
         send_kwargs: dict[str, Any],
     ) -> Response:
-        """Run the three-leg handshake on the connection that issued `response`."""
+        """Run the three-leg handshake on the connection that issued `response`.
+
+        A failure inside the handshake (pyspnego cannot build or step the context, or the
+        server's token is not valid base64) raises `AuthError` for the 401/407 being answered.
+
+        Args:
+            response: The 401/407 to answer.
+            challenge_header: Header carrying the server's challenge (`www-authenticate` or
+                `proxy-authenticate`).
+            auth_header: Header to send our tokens in (`Authorization` or `Proxy-Authorization`).
+            send_kwargs: Send options, reused for the handshake legs.
+
+        Returns:
+            The final response of the handshake, or `response` unchanged when the challenge
+            is not ours or was already answered.
+
+        Raises:
+            AuthError: if the handshake cannot complete; chained from pyspnego's or
+                `binascii`'s error.
+        """
         scheme = _pick_scheme(response.headers.get(challenge_header, ""), self.protocol)
         if scheme is None or auth_header in response.request.headers:
             return response  # not our challenge, or we already tried once
 
-        context = spnego.client(
-            self.username,
-            self.password,
-            hostname=_hostname(response.url),
-            service=self.service,
-            protocol=self.protocol,
-            channel_bindings=self._channel_bindings(response),
-        )
+        channel_bindings = self._channel_bindings(response)
+        try:
+            context = spnego.client(
+                self.username,
+                self.password,
+                hostname=_hostname(response.url),
+                service=self.service,
+                protocol=self.protocol,
+                channel_bindings=channel_bindings,
+            )
+            token = context.step()  # leg 1: our opening token
+        except _HANDSHAKE_ERRORS as e:
+            raise _handshake_error(response, scheme, e) from e
 
         # Consume the body and release the socket so the next leg reuses it.
         _rewind_body(response.request)
         _drain(response)
 
-        # Leg 1: our opening token.
+        # Leg 1: send our opening token.
         request = response.request.copy()
-        token = context.step()
         request.headers[auth_header] = f"{scheme} {_b64(token)}"
         challenge_response = response.connection.send(request, **send_kwargs)
         _drain(challenge_response)
@@ -195,17 +227,20 @@ class SpPremAuth(AuthBase):
             challenge_response.history.append(response)
             return challenge_response  # Kerberos: a single token may suffice
 
-        challenge = _extract_token(challenge_response.headers.get(challenge_header, ""), scheme)
+        try:
+            challenge = _extract_token(challenge_response.headers.get(challenge_header, ""), scheme)
+            token = None if challenge is None else context.step(challenge)  # leg 2: our answer
+        except _HANDSHAKE_ERRORS as e:
+            raise _handshake_error(challenge_response, scheme, e) from e
         if challenge is None:
             challenge_response.history.append(response)
             return challenge_response
 
-        # Leg 2: answer the server's challenge.
+        # Leg 2: send our answer to the server's challenge.
         request = challenge_response.request.copy()
         cookie = challenge_response.headers.get("set-cookie")
         if cookie:
             request.headers["Cookie"] = cookie  # some servers bind the handshake to a cookie
-        token = context.step(challenge)
         request.headers[auth_header] = f"{scheme} {_b64(token)}"
         final = response.connection.send(request, **send_kwargs)
         final.history.extend([response, challenge_response])
@@ -222,6 +257,22 @@ class SpPremAuth(AuthBase):
 
 
 # ---------------------------------------------------------------- helpers ----
+def _handshake_error(response: Response, scheme: str, cause: Exception) -> AuthError:
+    """Return the `AuthError` for a handshake that failed answering `response`.
+
+    Args:
+        response: The 401/407 being answered when the handshake failed.
+        scheme: The auth scheme of the handshake (`NTLM` or `Negotiate`).
+        cause: The error that stopped the handshake.
+
+    Returns:
+        An `AuthError` for `response` whose message names the scheme and the cause.
+    """
+    error = AuthError(response)
+    error.args = (f"{error.args[0]}: {scheme} handshake failed: {cause}",)
+    return error
+
+
 def certificate_hash(certificate_der: bytes) -> bytes:
     """Hash a DER certificate per RFC 5929 (its signature hash, or SHA-256 for MD5/SHA-1).
 

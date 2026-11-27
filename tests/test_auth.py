@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import datetime
 import hashlib
 import io
+import struct
 import warnings
 from typing import TYPE_CHECKING
 
@@ -16,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from requests import PreparedRequest, Request, Session
 from requests.auth import AuthBase
+from spnego.exceptions import SpnegoError
 
 from sppyte import AuthError, ConfigurationError, Site, SpPremAuth
 from sppyte.auth import _extract_token, _pick_scheme, _rewind_body, certificate_hash
@@ -199,6 +202,75 @@ def test_proxy_407_warning_points_at_the_caller():
     with pytest.warns(DeprecationWarning, match="2.0") as record:
         SpPremAuth("u", "p").handle_response(first)
     assert record[0].filename == __file__
+
+
+NOT_BASE64 = "NTLM !!!notbase64!!!"
+NOT_NTLM = "NTLM " + base64.b64encode(b"garbage").decode()
+
+
+def test_challenge_that_is_not_base64_raises_auth_error():
+    server = FakeNtlmAdapter(challenge_header=NOT_BASE64)
+    s = _session(server, SpPremAuth("u", "p"))
+
+    with pytest.raises(AuthError, match="NTLM handshake failed") as exc_info:
+        s.get(f"{BASE}/_api/web")
+
+    error = exc_info.value
+    assert isinstance(error.__cause__, binascii.Error)
+    assert error.status == 401
+    assert error.response is not None
+    assert error.response.request.headers["Authorization"].startswith("NTLM "), "the challenge response"
+    assert len(server.calls) == 2, "no AUTHENTICATE leg is sent"
+
+
+def test_challenge_pyspnego_rejects_raises_auth_error():
+    server = FakeNtlmAdapter(challenge_header=NOT_NTLM)
+    s = _session(server, SpPremAuth("u", "p"))
+
+    with pytest.raises(AuthError, match="NTLM handshake failed") as exc_info:
+        s.get(f"{BASE}/_api/web")
+
+    error = exc_info.value
+    # pyspnego's pure-Python NTLM parser lets a low-level error out for a token too short to parse.
+    assert isinstance(error.__cause__, struct.error)
+    assert not isinstance(error.__cause__, SpnegoError)
+    assert error.status == 401
+    assert len(server.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("header", "cause"),
+    [(NOT_BASE64, binascii.Error), (NOT_NTLM, struct.error)],
+    ids=["not-base64", "not-ntlm"],
+)
+def test_site_raises_auth_error_when_handshake_fails(header: str, cause: type[Exception]):
+    server = FakeNtlmAdapter(challenge_header=header)
+    session = Session()
+    session.mount("https://", server)
+    site = Site(HOST, SITE_REL, "jsmith", "pw", domain="CONTOSO", session=session)
+
+    with pytest.raises(AuthError, match="handshake failed") as exc_info:
+        site.request("get", "_api/web")
+
+    assert exc_info.value.status == 401
+    assert str(exc_info.value).startswith("HTTP 401: Unauthorized: NTLM handshake failed: ")
+    assert isinstance(exc_info.value.__cause__, cause)
+
+
+def test_handshake_failure_without_credentials_raises_auth_error(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("NTLM_USER_FILE", raising=False)  # pyspnego's NTLM credential cache
+    server = FakeNtlmAdapter()
+    auth = SpPremAuth("u", "p")
+    auth.username = auth.password = None  # as for single sign-on with nothing to sign on with
+    s = _session(server, auth)
+
+    with pytest.raises(AuthError, match="NTLM handshake failed") as exc_info:
+        s.get(f"{BASE}/_api/web")
+
+    assert isinstance(exc_info.value.__cause__, SpnegoError)
+    assert exc_info.value.response is not None
+    assert exc_info.value.response.request.headers.get("Authorization") is None, "the first 401"
+    assert len(server.calls) == 1
 
 
 # --------------------------------------------------------------- helpers ----

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-27
+
+### Fixed
+
+- A failed NTLM or Kerberos handshake (a malformed challenge from the server, or single sign-on
+  with no usable credentials) now raises `AuthError` instead of a pyspnego, `binascii` or parsing
+  error. The original error is its `__cause__`, and the message says which handshake failed.
+
 ## [1.2.0] - 2026-11-27
 
 ### Added
@@ -218,7 +226,8 @@ First beta: the planned 1.0 feature set is complete.
   said so but the signature did not).
 - `List.add_item` / `List.update_item` accept any `Mapping`, not just `dict`.
 
-[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/B-Jones-RFD/sppyte/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/B-Jones-RFD/sppyte/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0...v1.1.0
