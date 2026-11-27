@@ -273,6 +273,24 @@ def test_handshake_failure_without_credentials_raises_auth_error(monkeypatch: py
     assert len(server.calls) == 1
 
 
+def test_kerberos_without_gssapi_raises_configuration_error(monkeypatch: pytest.MonkeyPatch):
+    def client_without_gssapi(*args: object, **kwargs: object) -> object:
+        del args, kwargs  # stands in for spnego.client, whose arguments don't matter here
+        msg = "GSSAPIProxy requires the Python gssapi library: No module named 'gssapi'"
+        raise ImportError(msg)
+
+    monkeypatch.setattr("sppyte.auth.spnego.client", client_without_gssapi)
+    server = FakeNtlmAdapter(schemes="Negotiate")
+    s = _session(server, SpPremAuth(protocol="kerberos"))
+
+    with pytest.raises(ConfigurationError, match=r"sppyte\[kerberos\]") as exc_info:
+        s.get(f"{BASE}/_api/web")
+
+    assert isinstance(exc_info.value, ValueError)
+    assert isinstance(exc_info.value.__cause__, ImportError)
+    assert len(server.calls) == 1, "nothing is sent after the first 401"
+
+
 # --------------------------------------------------------------- helpers ----
 def test_pick_scheme():
     assert _pick_scheme("NTLM", "ntlm") == "NTLM"

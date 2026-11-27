@@ -40,7 +40,7 @@ Site(HOST, SITE, auth=my_requests_auth_handler)                               # 
 
 - `protocol="ntlm"` requires `username` and `password`.
 - `protocol="negotiate"` or `"kerberos"` works without credentials on a domain-joined machine (SSPI on Windows, a `kinit` ticket elsewhere); pass credentials to authenticate as someone else.
-- Kerberos on Linux/macOS needs the system GSSAPI libraries and `pip install "sppyte[kerberos]"`; Windows uses SSPI.
+- Kerberos on Linux/macOS needs the system GSSAPI libraries and `pip install "sppyte[kerberos]"`; Windows uses SSPI. Without the extra, the first request with `protocol="kerberos"` raises `ConfigurationError` saying so. `protocol="negotiate"` falls back to NTLM instead.
 - Over HTTPS, TLS channel bindings are sent automatically for servers with Extended Protection.
 - Credentials go only to the configured host: a 401 challenge from another host, reached through a redirect, is returned unanswered.
 - `SpPremAuth` is a plain `requests` auth handler, usable on your own `Session` too. Bad arguments (an unknown `protocol`, NTLM without a username and password) raise `ConfigurationError`.

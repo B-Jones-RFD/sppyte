@@ -151,6 +151,8 @@ class SpPremAuth(AuthBase):
                 server challenge, or single sign-on with no usable Kerberos credentials. Its
                 `status` and `response` are those of the 401/407 being answered, and pyspnego's
                 (or `binascii`'s) error is its `__cause__`.
+            ConfigurationError: if `protocol="kerberos"` is used without the `gssapi` package
+                (the `kerberos` extra), outside Windows.
         """
         if origin is not None and _origin(response.url) != origin:
             return response
@@ -194,6 +196,8 @@ class SpPremAuth(AuthBase):
         Raises:
             AuthError: if the handshake cannot complete; chained from pyspnego's or
                 `binascii`'s error.
+            ConfigurationError: if `protocol="kerberos"` is used without the `gssapi` package
+                (the `kerberos` extra), outside Windows.
         """
         scheme = _pick_scheme(response.headers.get(challenge_header, ""), self.protocol)
         if scheme is None or auth_header in response.request.headers:
@@ -210,6 +214,11 @@ class SpPremAuth(AuthBase):
                 channel_bindings=channel_bindings,
             )
             token = context.step()  # leg 1: our opening token
+        except ImportError as e:
+            # pyspnego builds Kerberos contexts on the gssapi package outside Windows and
+            # raises ImportError when it is missing; that is a setup problem, not a failed login.
+            msg = f'protocol={self.protocol!r} needs the Kerberos extra: pip install "sppyte[kerberos]" ({e})'
+            raise ConfigurationError(msg) from e
         except _HANDSHAKE_ERRORS as e:
             raise _handshake_error(response, scheme, e) from e
 
