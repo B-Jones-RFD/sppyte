@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Sppyte: a tiny helper around SharePoint REST endpoints using requests + NTLM.
+"""sppyte: a thin client for SharePoint on-premises REST, with NTLM or Kerberos authentication.
 
 It purposefully keeps a thin, explicit mapping to REST calls so behaviour
 remains transparent and easy to debug. Start with `Site`.

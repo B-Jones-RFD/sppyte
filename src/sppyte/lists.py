@@ -54,6 +54,11 @@ class List:
 
         Fetched once and cached for the lifetime of this object. Concurrent
         callers share one fetch.
+
+        Raises:
+            AuthError: on 401/403 (first read only).
+            SharePointError: on any other 4xx/5xx (first read only).
+            ResponseFormatError: if the response is not JSON or has no item type (first read only).
         """
         item_type = self._item_type
         if item_type is not None:
@@ -67,7 +72,12 @@ class List:
     def get_item_type(self) -> str:
         """Fetch `ListItemEntityTypeFullName` from SharePoint and refresh the cache.
 
+        Returns:
+            The item type, e.g. `SP.Data.TasksListItem`.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not JSON or has no item type.
         """
         with self._lock:
@@ -102,7 +112,12 @@ class List:
         Args:
             params: OData options, e.g. `{"$select": "Id,Title", "$top": 5}`.
 
+        Returns:
+            A `Page` of item dicts; `next_link` is the link to the next page, or `None`.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not a JSON collection.
         """
         r = self.site.request(
@@ -121,6 +136,15 @@ class List:
         Args:
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
+
+        Returns:
+            An iterator of pages, one request each.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ConfigurationError: if a `next_link` is not on the site's host.
+            ResponseFormatError: if a page is not a JSON collection.
         """
         yield from follow_pages(self.get_contents(params), self.site.get_page, max_pages)
 
@@ -130,6 +154,15 @@ class List:
         Args:
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
+
+        Returns:
+            An iterator of item dicts, in page order.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ConfigurationError: if a `next_link` is not on the site's host.
+            ResponseFormatError: if a page is not a JSON collection.
 
         Example:
             `for task in tasks.iter_items({"$select": "Id,Title", "$top": 500}): ...`
@@ -143,13 +176,30 @@ class List:
         Args:
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
+
+        Returns:
+            Every item dict, in page order.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ConfigurationError: if a `next_link` is not on the site's host.
+            ResponseFormatError: if a page is not a JSON collection.
         """
         return list(self.iter_items(params, max_pages=max_pages))
 
     def get_item(self, sp_id: int) -> dict[str, Any]:
         """Fetch a single list item by its SharePoint `Id`.
 
+        Args:
+            sp_id: SharePoint `Id` of the item.
+
+        Returns:
+            The item's fields as a dict.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not a JSON object.
         """
         r = self.site.request(
@@ -183,8 +233,14 @@ class List:
                 belong in the CAML).
             digest: Form digest to send instead of the managed one (`GetItems` is a POST).
 
+        Returns:
+            A `Page` of matching item dicts (`next_link` is not used by CAML paging).
+
         Raises:
-            ResponseFormatError: if the response is not a JSON collection.
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the response is not a JSON collection, or, without `digest`, the
+                contextinfo response has no form digest.
         """
         query: dict[str, Any] = {"__metadata": {"type": "SP.CamlQuery"}, "ViewXml": view_xml}
         if paging_info is not None:
@@ -221,10 +277,15 @@ class List:
             max_pages: Stop after this many pages; `None` for no limit.
             digest: Form digest to send instead of the managed one.
 
+        Returns:
+            An iterator of matching item dicts, one `GetItems` request per page.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ConfigurationError: if `view_xml` has no `<RowLimit>`.
             ResponseFormatError: if a page is not a JSON collection or its last item has
-                no integer `Id`.
+                no integer `Id`, or, without `digest`, the contextinfo response has no form digest.
         """
         match = _ROW_LIMIT_RE.search(view_xml)
         if not match:
@@ -262,10 +323,15 @@ class List:
             max_pages: Stop after this many pages; `None` for no limit.
             digest: Form digest to send instead of the managed one.
 
+        Returns:
+            Every matching item dict, in page order.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ConfigurationError: if `view_xml` has no `<RowLimit>`.
             ResponseFormatError: if a page is not a JSON collection or its last item has
-                no integer `Id`.
+                no integer `Id`, or, without `digest`, the contextinfo response has no form digest.
         """
         return list(self.iter_query(view_xml, params=params, max_pages=max_pages, digest=digest))
 
@@ -280,8 +346,14 @@ class List:
             item: Field values for the new item.
             digest: Form digest to send instead of the managed one.
 
+        Returns:
+            The created item's fields as a dict, including its integer `Id`.
+
         Raises:
-            ResponseFormatError: if the response is not JSON or has no integer `Id`.
+            AuthError: on 401/403, including the `item_type` fetch.
+            SharePointError: on any other 4xx/5xx, including the `item_type` fetch.
+            ResponseFormatError: if the response is not JSON or has no integer `Id`, the `item_type`
+                fetch finds no item type, or, without `digest`, the contextinfo response has no form digest.
         """
         r = self.site.request(
             "post",
@@ -305,6 +377,12 @@ class List:
 
         Returns:
             `sp_id`, for convenience.
+
+        Raises:
+            AuthError: on 401/403, including the `item_type` fetch.
+            SharePointError: on any other 4xx/5xx, including the `item_type` fetch.
+            ResponseFormatError: if the `item_type` fetch finds no item type, or, without `digest`, the
+                contextinfo response has no form digest.
         """
         self.site.request(
             "post",
@@ -329,6 +407,11 @@ class List:
 
         Returns:
             `True`; failures raise.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if, without `digest`, the contextinfo response has no form digest.
         """
         self.site.request(
             "post",
@@ -363,7 +446,10 @@ class List:
             The `SP.Attachment` object SharePoint created (`FileName`, `ServerRelativeUrl`).
 
         Raises:
-            ResponseFormatError: if the response is not a JSON object.
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the response is not a JSON object, or, without `digest`, the
+                contextinfo response has no form digest.
         """
         r = self.site.request(
             "post",

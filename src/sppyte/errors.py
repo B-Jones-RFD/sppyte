@@ -60,7 +60,17 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
-    """Warn on access to deprecated names."""
+    """Warn on access to deprecated names.
+
+    Args:
+        name: The attribute being looked up on the module.
+
+    Returns:
+        `SessionError`, after emitting a `DeprecationWarning`.
+
+    Raises:
+        AttributeError: for any other name.
+    """
     if name == "SessionError":
         warnings.warn(_SESSION_ERROR_DEPRECATED, DeprecationWarning, stacklevel=2)
         return _SessionError
@@ -91,6 +101,9 @@ class SharePointError(SppyteError, HTTPError):
         message: SharePoint error message from the response body, if present.
         retry_after: Seconds the server asked clients to wait (`Retry-After`), if sent.
         response: The underlying `requests.Response` (inherited from `HTTPError`).
+
+    Args:
+        response: The failed response; its body, status and `Retry-After` header fill the attributes.
     """
 
     status: int
@@ -115,7 +128,15 @@ class AuthError(SharePointError):
 
 
 def raise_for_status(response: Response) -> None:
-    """Raise `AuthError` for 401/403 and `SharePointError` for any other 4xx/5xx."""
+    """Raise `AuthError` for 401/403 and `SharePointError` for any other 4xx/5xx.
+
+    Args:
+        response: The response to check; a status below 400 returns without raising.
+
+    Raises:
+        AuthError: on 401/403.
+        SharePointError: on any other 4xx/5xx.
+    """
     if response.status_code < HTTP_ERROR_MIN:
         return
     if response.status_code in (UNAUTHORIZED, FORBIDDEN):
@@ -129,6 +150,9 @@ def parse_sharepoint_error(body: Any) -> SharePointErrorDetails | None:
     Handles both the `odata=verbose` shape
     (`{"error": {"code": ..., "message": {"value": ...}}}`) and the
     `odata=nometadata` / `minimalmetadata` shape (`{"odata.error": ...}`).
+
+    Args:
+        body: The raw response text; anything other than a non-empty string yields `None`.
 
     Returns:
         The parsed details, or `None` when the body is not a SharePoint error.

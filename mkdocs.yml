@@ -1,5 +1,5 @@
 site_name: sppyte
-site_description: A tiny, explicit Python helper for SharePoint on-premises REST with NTLM.
+site_description: A tiny, explicit Python helper for SharePoint on-premises REST with NTLM or Kerberos (Negotiate) authentication.
 site_url: https://b-jones-rfd.github.io/sppyte/
 repo_url: https://github.com/B-Jones-RFD/sppyte
 repo_name: B-Jones-RFD/sppyte
@@ -37,6 +37,7 @@ nav:
       - Errors: api/errors.md
       - Retry: api/retry.md
       - OData and parsing: api/odata.md
+  - Migrating: migrating.md
   - Changelog: changelog.md
 
 plugins:

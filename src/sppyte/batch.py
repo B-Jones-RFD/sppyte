@@ -157,7 +157,19 @@ class Batch:
         return self
 
     def get(self, path: str, *, params: Params = None, headers: Mapping[str, str] | None = None) -> Batch:
-        """Queue a `GET`; see `add` for the arguments."""
+        """Queue a `GET`.
+
+        Args:
+            path: Site-relative REST path (`_api/...`) or an absolute URL on the site's host.
+            params: OData query options appended to the URL.
+            headers: Extra headers for this sub-request.
+
+        Returns:
+            This batch, so calls can be chained.
+
+        Raises:
+            ConfigurationError: if an absolute `path` is not on the site's host.
+        """
         return self.add("GET", path, params=params, headers=headers)
 
     def post(
@@ -169,7 +181,21 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """Queue a `POST` (create, or any action endpoint); see `add` for the arguments."""
+        """Queue a `POST` (create, or any action endpoint).
+
+        Args:
+            path: Site-relative REST path (`_api/...`) or an absolute URL on the site's host.
+            json: JSON body, serialised for you.
+            params: OData query options appended to the URL.
+            body: Pre-serialised body, sent as-is. Pass either `json` or `body`.
+            headers: Extra headers for this sub-request.
+
+        Returns:
+            This batch, so calls can be chained.
+
+        Raises:
+            ConfigurationError: if both `json` and `body` are given, or an absolute `path` is not on the site's host.
+        """
         return self.add("POST", path, params=params, json=json, body=body, headers=headers)
 
     def merge(
@@ -181,7 +207,21 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """Queue a `MERGE` (partial update; omitted fields are untouched); see `add`."""
+        """Queue a `MERGE` (partial update; omitted fields are untouched).
+
+        Args:
+            path: Site-relative REST path (`_api/...`) or an absolute URL on the site's host.
+            json: JSON body, serialised for you.
+            params: OData query options appended to the URL.
+            body: Pre-serialised body, sent as-is. Pass either `json` or `body`.
+            headers: Extra headers for this sub-request.
+
+        Returns:
+            This batch, so calls can be chained.
+
+        Raises:
+            ConfigurationError: if both `json` and `body` are given, or an absolute `path` is not on the site's host.
+        """
         return self.add("MERGE", path, params=params, json=json, body=body, headers=headers)
 
     def patch(
@@ -193,11 +233,37 @@ class Batch:
         body: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Batch:
-        """Queue a `PATCH` (equivalent to `MERGE` on SharePoint); see `add`."""
+        """Queue a `PATCH` (equivalent to `MERGE` on SharePoint).
+
+        Args:
+            path: Site-relative REST path (`_api/...`) or an absolute URL on the site's host.
+            json: JSON body, serialised for you.
+            params: OData query options appended to the URL.
+            body: Pre-serialised body, sent as-is. Pass either `json` or `body`.
+            headers: Extra headers for this sub-request.
+
+        Returns:
+            This batch, so calls can be chained.
+
+        Raises:
+            ConfigurationError: if both `json` and `body` are given, or an absolute `path` is not on the site's host.
+        """
         return self.add("PATCH", path, params=params, json=json, body=body, headers=headers)
 
     def delete(self, path: str, *, params: Params = None, headers: Mapping[str, str] | None = None) -> Batch:
-        """Queue a `DELETE`; see `add` for the arguments."""
+        """Queue a `DELETE`.
+
+        Args:
+            path: Site-relative REST path (`_api/...`) or an absolute URL on the site's host.
+            params: OData query options appended to the URL.
+            headers: Extra headers for this sub-request.
+
+        Returns:
+            This batch, so calls can be chained.
+
+        Raises:
+            ConfigurationError: if an absolute `path` is not on the site's host.
+        """
         return self.add("DELETE", path, params=params, headers=headers)
 
     # ---------------------------------------------------------------- send ----
@@ -216,7 +282,10 @@ class Batch:
             One `BatchResponse` per request, in order.
 
         Raises:
-            ResponseFormatError: if the response is not multipart or the part count differs.
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the response is not multipart or the part count differs, or, without
+                `digest`, the contextinfo response that supplies the managed digest is not JSON or has no form digest.
         """
         if not self.requests:
             return []
@@ -256,7 +325,14 @@ class Batch:
 
 # ------------------------------------------------------------- encoding ----
 def new_boundary(prefix: str) -> str:
-    """Return a unique multipart boundary, e.g. `batch_<uuid>`."""
+    """Return a unique multipart boundary, e.g. `batch_<uuid>`.
+
+    Args:
+        prefix: Text before the underscore, e.g. `batch` or `changeset`.
+
+    Returns:
+        `<prefix>_<uuid4>`.
+    """
     return f"{prefix}_{uuid.uuid4()}"
 
 
@@ -289,6 +365,13 @@ def build_batch_body(requests: list[BatchRequest], boundary: str) -> str:
     Reads are individual parts; each run of consecutive writes is wrapped in
     one changeset, as OData requires. Order is preserved so responses can be
     matched to requests.
+
+    Args:
+        requests: The sub-requests, in order.
+        boundary: The outer multipart boundary, as sent in the `Content-Type` header.
+
+    Returns:
+        The multipart body text, with CRLF line endings.
     """
     parts: list[str] = []
     i = 0
@@ -313,7 +396,14 @@ def build_batch_body(requests: list[BatchRequest], boundary: str) -> str:
 
 # ------------------------------------------------------------- decoding ----
 def multipart_boundary(content_type: str | None) -> str | None:
-    """Extract `boundary=...` from a multipart `Content-Type` header, or `None`."""
+    """Extract `boundary=...` from a multipart `Content-Type` header, or `None`.
+
+    Args:
+        content_type: The `Content-Type` header value, or `None`.
+
+    Returns:
+        The boundary without quotes, or `None` if the header is missing or has no boundary.
+    """
     if not content_type:
         return None
     match = _BOUNDARY_RE.search(content_type)
@@ -379,6 +469,13 @@ def parse_batch_response(body: str, content_type: str | None) -> list[BatchRespo
     """Parse a `$batch` response body into one `BatchResponse` per sub-request.
 
     Changeset responses are flattened; order is preserved.
+
+    Args:
+        body: The response body text; CRLF or LF line endings.
+        content_type: The response's `Content-Type` header, which carries the boundary.
+
+    Returns:
+        One `BatchResponse` per `application/http` part, in order.
 
     Raises:
         ResponseFormatError: if the response is not `multipart/mixed`.

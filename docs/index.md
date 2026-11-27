@@ -11,7 +11,9 @@ A tiny, explicit Python helper for working with a SharePoint site through the le
 pip install sppyte
 ```
 
-Python 3.10 or later. Runtime dependencies: `requests`, `pyspnego` and `cryptography`. Add `sppyte[kerberos]` for Kerberos on Linux/macOS.
+Python 3.11 or later. SharePoint 2013, 2016, 2019 or Subscription Edition (`$batch` needs 2016 or later).
+Runtime dependencies: `requests` (HTTP), `pyspnego` (NTLM and Kerberos) and `cryptography` (TLS channel bindings).
+Add the `kerberos` extra (`pip install "sppyte[kerberos]"`) for Kerberos on Linux or macOS.
 
 ## Quickstart
 

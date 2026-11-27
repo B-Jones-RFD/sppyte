@@ -36,6 +36,13 @@ def is_transient(exc: BaseException) -> bool:
 
     This is the default `RetryOptions.retry_on`: connection failures, timeouts,
     and `SharePointError` with status 429, 502, 503 or 504.
+
+    Args:
+        exc: The exception raised by a failed attempt.
+
+    Returns:
+        `True` if `exc` is a `requests` connection error or timeout, or a `SharePointError` whose
+        status is in `RETRYABLE_STATUSES`; `False` otherwise.
     """
     if isinstance(exc, SharePointError):
         return exc.status in RETRYABLE_STATUSES

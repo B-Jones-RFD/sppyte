@@ -137,6 +137,11 @@ class SpPremAuth(AuthBase):
 
         Returns:
             The final response of the handshake, or `response` unchanged.
+
+        Raises:
+            spnego.exceptions.SpnegoError: if pyspnego cannot build or step the security context,
+                for example a malformed server challenge or no usable Kerberos credentials.
+            binascii.Error: if the server's challenge token is not valid base64.
         """
         if origin is not None and _origin(response.url) != origin:
             return response
@@ -218,7 +223,17 @@ class SpPremAuth(AuthBase):
 
 # ---------------------------------------------------------------- helpers ----
 def certificate_hash(certificate_der: bytes) -> bytes:
-    """Hash a DER certificate per RFC 5929 (its signature hash, or SHA-256 for MD5/SHA-1)."""
+    """Hash a DER certificate per RFC 5929 (its signature hash, or SHA-256 for MD5/SHA-1).
+
+    Args:
+        certificate_der: The peer certificate, DER-encoded.
+
+    Returns:
+        The certificate digest, for `tls-server-end-point` channel bindings.
+
+    Raises:
+        ValueError: if `certificate_der` is not a valid DER certificate.
+    """
     cert = x509.load_der_x509_certificate(certificate_der)
     algorithm = cert.signature_hash_algorithm
     if algorithm is None or algorithm.name.lower() in _WEAK_HASHES:

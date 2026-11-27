@@ -17,7 +17,10 @@ if TYPE_CHECKING:
     from sppyte.site import Site
 
 DEFAULT_CHUNK_SIZE = 64 * 1024
-"""Chunk size in bytes for streamed downloads."""
+"""Chunk size in bytes for streamed downloads.
+
+64 KiB: few enough reads to be fast, small enough to keep memory flat.
+"""
 
 Document = bytes | IO[bytes] | str | os.PathLike[str]
 """Upload payload: raw bytes, a binary file object, or a path to open and stream."""
@@ -44,7 +47,11 @@ class Library:
 
     # --------------------------------------------------------------- paths ----
     def server_relative_url(self, *parts: str) -> str:
-        """Return the server-relative URL of a path beneath this library (unescaped)."""
+        """Return the server-relative URL of a path beneath this library (unescaped).
+
+        Args:
+            *parts: Path segments beneath the library; none for the library root.
+        """
         return build_path(self.site.relative_url, self.name, *parts)
 
     def folder_path(self, *subfolders: str) -> str:
@@ -52,6 +59,9 @@ class Library:
 
         The result is `_api/web/GetFolderByServerRelativeUrl('...')` with the
         URL escaped. Useful for `Site.request` and `Batch` sub-requests.
+
+        Args:
+            *subfolders: Path segments beneath the library; none for the root.
         """
         return f"_api/web/GetFolderByServerRelativeUrl('{odata_path(self.server_relative_url(*subfolders))}')"
 
@@ -59,6 +69,10 @@ class Library:
         """Return the site-relative REST path addressing a file beneath this library.
 
         The result is `_api/web/GetFileByServerRelativeUrl('...')` with the URL escaped.
+
+        Args:
+            file_name: File name, including extension.
+            *subfolders: Path segments beneath the library; none for the root.
         """
         return f"_api/web/GetFileByServerRelativeUrl('{odata_path(self.server_relative_url(*subfolders, file_name))}')"
 
@@ -68,7 +82,13 @@ class Library:
 
         A missing folder is `False`, not an error.
 
+        Args:
+            folder: Name of the folder (or the first path segment).
+            *subfolders: Further path segments.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not JSON with a boolean `value`.
         """
         r = self.site.request(
@@ -99,7 +119,12 @@ class Library:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options such as `$select`, `$top`, `$filter`.
 
+        Returns:
+            A `Page` of `SP.File` objects.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not a JSON collection.
 
         Example:
@@ -117,7 +142,12 @@ class Library:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options such as `$select`, `$top`, `$filter`.
 
+        Returns:
+            A `Page` of `SP.Folder` objects; its `next_link` is set when more folders remain.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not a JSON collection.
         """
         return self._collection("Folders", subfolders, params)
@@ -131,6 +161,15 @@ class Library:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
+
+        Returns:
+            An iterator of `Page` objects of `SP.File` items, one request each.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ConfigurationError: if a `next_link` is not on this site's host.
+            ResponseFormatError: if a page is not a JSON collection.
         """
         yield from follow_pages(self.list_contents(*subfolders, params=params), self.site.get_page, max_pages)
 
@@ -143,6 +182,15 @@ class Library:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
+
+        Returns:
+            An iterator of `SP.File` objects, fetching the next page as each one runs out.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ConfigurationError: if a `next_link` is not on this site's host.
+            ResponseFormatError: if a page is not a JSON collection.
         """
         for page in self.iter_pages(*subfolders, params=params, max_pages=max_pages):
             yield from page
@@ -156,6 +204,15 @@ class Library:
             *subfolders: Path segments beneath the library; none for the root.
             params: OData options for the first page.
             max_pages: Stop after this many pages; `None` for no limit.
+
+        Returns:
+            A list of every `SP.File` object fetched.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ConfigurationError: if a `next_link` is not on this site's host.
+            ResponseFormatError: if a page is not a JSON collection.
         """
         return list(self.iter_files(*subfolders, params=params, max_pages=max_pages))
 
@@ -169,7 +226,19 @@ class Library:
         )
 
     def get_document(self, file_name: str, *subfolders: str) -> bytes:
-        """Download a file's contents into memory and return them."""
+        """Download a file's contents into memory and return them.
+
+        Args:
+            file_name: File name, including extension.
+            *subfolders: Path segments beneath the library; none for the root.
+
+        Returns:
+            The file's contents.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+        """
         with self._open_document(file_name, subfolders) as r:
             return r.content
 
@@ -182,6 +251,13 @@ class Library:
             file_name: File name, including extension.
             *subfolders: Path segments beneath the library; none for the root.
             chunk_size: Size of each chunk in bytes.
+
+        Returns:
+            An iterator of byte chunks, each at most `chunk_size` bytes.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
 
         Example:
             `for chunk in docs.iter_document("big.iso", "ISOs"): out.write(chunk)`
@@ -216,6 +292,7 @@ class Library:
         Raises:
             AuthError: on 401/403.
             SharePointError: on any other 4xx/5xx.
+            OSError: if `dest` is a path that cannot be opened for writing.
 
         Example:
             `docs.download("report.pdf", "~/report.pdf", "Reports")`
@@ -243,7 +320,10 @@ class Library:
             The `SP.Folder` object (`Name`, `ServerRelativeUrl`, `UniqueId`, `Exists`, ...).
 
         Raises:
-            ResponseFormatError: if the response is not a JSON object.
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the response is not a JSON object, or if the contextinfo
+                response for the managed digest is not JSON or has no form digest.
         """
         r = self.site.request(
             "post",
@@ -280,7 +360,11 @@ class Library:
             `UniqueId`, `Length`, ...).
 
         Raises:
-            ResponseFormatError: if the response is not a JSON object.
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the response is not a JSON object, or if the contextinfo
+                response for the managed digest is not JSON or has no form digest.
+            OSError: if `document` is a path that cannot be opened.
         """
         flag = "true" if overwrite else "false"
         path = f"{self.folder_path(*subfolders)}/Files/add(url='{odata_literal(file_name)}',overwrite={flag})"
@@ -302,6 +386,11 @@ class Library:
 
         Returns:
             `True`; failures raise.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the contextinfo response for the managed digest is not JSON or has no form digest.
         """
         self.site.request(
             "post",
@@ -321,6 +410,11 @@ class Library:
 
         Returns:
             `True`; failures raise.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the contextinfo response for the managed digest is not JSON or has no form digest.
         """
         self.site.request(
             "post",

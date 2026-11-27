@@ -30,7 +30,11 @@ DIGEST_REFRESH_MARGIN = 60.0
 """Refresh the digest this many seconds before SharePoint says it expires."""
 
 DEFAULT_TIMEOUT = 30.0
-"""Default per-request timeout in seconds (connect and read)."""
+"""Default per-request timeout in seconds (connect and read).
+
+Long enough for a large list read on a busy farm, short enough that a hung connection fails
+instead of blocking the caller indefinitely.
+"""
 
 Timeout = float | tuple[float, float] | None
 """A `requests` timeout: seconds, a `(connect, read)` pair, or `None` for no timeout."""
@@ -80,6 +84,17 @@ class Site:
         retry: Retry transient failures on reads (`GET` requests and CAML queries).
             `True` for the defaults, a `RetryOptions` to tune, `None` (default) for off.
             Writes are never retried. See `sppyte.retry`.
+
+    Attributes:
+        host: `host` as given, without a trailing slash.
+        relative_url: `site_relative_url` normalised to `""` (root site) or `/path`.
+        site_path: `host` + `relative_url`; every request URL starts with it.
+        auth: The `requests` authentication handler in use: the `SpPremAuth` sppyte built,
+            or the `auth` you passed.
+        session: The `requests.Session`; `None` until the first request (or `connect()`) when
+            sppyte creates it, and again after `close()`.
+        timeout: The default per-request timeout.
+        retry: The `RetryOptions` in effect, or `None` when retry is off.
 
     Raises:
         ConfigurationError: if any option is malformed; the message names the option and
@@ -191,7 +206,11 @@ class Site:
     def connect(self) -> None:
         """Create the authenticated session and fetch a form digest eagerly.
 
+        Use it to check the credentials and site up front rather than on the first call.
+
         Raises:
+            AuthError: on 401/403, for example when the credentials are rejected.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the contextinfo response is not JSON or has no form digest.
         """
         self._ensure_session()
@@ -219,7 +238,12 @@ class Site:
         Args:
             refresh: Fetch a new digest even if the cached one is still valid.
 
+        Returns:
+            The form digest value to send as `X-RequestDigest`.
+
         Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the contextinfo response is not JSON or has no form digest.
         """
         with self._lock:
@@ -245,7 +269,18 @@ class Site:
             self._digest_expires_at = 0.0
 
     def get_form_digest(self) -> str:
-        """Fetch a fresh form digest from `/_api/contextinfo`, bypassing the cache."""
+        """Fetch a fresh form digest from `/_api/contextinfo`, bypassing the cache.
+
+        Same as `digest(refresh=True)`; the new digest is also cached.
+
+        Returns:
+            The form digest value to send as `X-RequestDigest`.
+
+        Raises:
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: if the contextinfo response is not JSON or has no form digest.
+        """
         return self.digest(refresh=True)
 
     # ------------------------------------------------------------ request ----
@@ -292,6 +327,8 @@ class Site:
         Raises:
             AuthError: on 401/403.
             SharePointError: on any other 4xx/5xx.
+            ResponseFormatError: with `digest=True`, if the contextinfo response is not JSON or
+                has no form digest.
         """
         if retry is None:
             retry = method.upper() == "GET" and not digest
@@ -330,9 +367,14 @@ class Site:
             next_link: The link from a previous `Page`.
             **kwargs: Passed to `requests.Session.request`.
 
+        Returns:
+            The next `Page` of results, with its own `next_link` if more remain.
+
         Raises:
             ConfigurationError: if the link is not on this site's host, so
                 credentials are never sent elsewhere.
+            AuthError: on 401/403.
+            SharePointError: on any other 4xx/5xx.
             ResponseFormatError: if the response is not a JSON collection.
         """
         wanted = urlsplit(self.host)
@@ -351,6 +393,9 @@ class Site:
 
         Args:
             name: The list title as shown in SharePoint.
+
+        Returns:
+            A `List` for `name` on this site.
         """
         return List(name, self)
 
@@ -359,6 +404,9 @@ class Site:
 
         Args:
             name: The library name as it appears in its URL, e.g. `"Shared Documents"`.
+
+        Returns:
+            A `Library` for `name` on this site.
         """
         return Library(name, self)
 
@@ -366,6 +414,9 @@ class Site:
         """Return an empty `Batch` to send several requests in one round trip.
 
         Requires SharePoint 2016 or later. See `sppyte.batch`.
+
+        Returns:
+            A new, empty `Batch` bound to this site; nothing is sent until `Batch.send`.
         """
         return Batch(self)
 

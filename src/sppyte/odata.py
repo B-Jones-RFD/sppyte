@@ -27,6 +27,12 @@ def build_path(*parts: str | None) -> str:
 
     Empty and `None` segments are skipped; surrounding slashes are trimmed.
 
+    Args:
+        *parts: Path segments in order; empty strings and `None` are skipped.
+
+    Returns:
+        The joined path with a single leading `/` and no trailing slash, or `"/"` if no segment is left.
+
     Example:
         `build_path("sites/demo", "Shared Documents", "Reports")`
         returns `"/sites/demo/Shared Documents/Reports"`.
@@ -43,6 +49,12 @@ def odata_literal(value: str) -> str:
     spaces, `#`, `%`, `?` and `&` cannot break the URL. The doubled apostrophes
     survive encoding because SharePoint expects them literally.
 
+    Args:
+        value: The raw value to place inside the literal.
+
+    Returns:
+        The escaped, percent-encoded value, without the surrounding apostrophes.
+
     Example:
         `odata_literal("O'Brien's #1 Report")` returns `"O''Brien''s%20%231%20Report"`.
     """
@@ -54,6 +66,12 @@ def odata_path(path: str) -> str:
 
     Each `/`-separated segment is passed through `odata_literal`, so slashes are
     preserved while everything else is escaped.
+
+    Args:
+        path: A server-relative path such as `/sites/demo/Shared Documents/Report.docx`.
+
+    Returns:
+        The path with each segment escaped as by `odata_literal` and the `/` separators kept.
 
     Example:
         `odata_path("/sites/demo/Shared Documents/Q1 '25")`
@@ -69,6 +87,10 @@ class Page(list[dict[str, Any]]):
     and `None` otherwise. A `Page` behaves exactly like a list, so
     `for item in site.list("Tasks").get_contents()` keeps working. Follow
     `next_link` with `Site.get_page`, or use the `iter_*` / `get_all_*` helpers.
+
+    Args:
+        items: The items on this page.
+        next_link: URL of the following page, or `None` if this is the last page.
     """
 
     __slots__ = ("next_link",)
@@ -87,6 +109,12 @@ def parse_page(payload: Any) -> Page:
 
     Reads the `value` array and `odata.nextLink` (or `@odata.nextLink`). A
     missing `value` yields an empty page.
+
+    Args:
+        payload: The decoded JSON body of a collection response.
+
+    Returns:
+        A `Page` holding the `value` items, with `next_link` set to the next-page URL or `None`.
 
     Raises:
         ResponseFormatError: if the payload is not an object or `value` is not a list.
@@ -113,6 +141,15 @@ def follow_pages(
         first: The page to start from.
         fetch_next: Fetches the page a `next_link` points at (normally `Site.get_page`).
         max_pages: Stop after this many pages even if more remain; `None` for no limit.
+
+    Returns:
+        An iterator of pages, starting with `first`; each later page is one call to `fetch_next`.
+
+    Raises:
+        Exception: whatever `fetch_next` raises propagates unchanged. With `Site.get_page` that is
+            `ConfigurationError` if a link is not on the site's host, `AuthError` on 401/403,
+            `SharePointError` on any other 4xx/5xx and `ResponseFormatError` if the response is not
+            a JSON collection.
     """
     page = first
     count = 1

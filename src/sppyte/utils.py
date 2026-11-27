@@ -79,6 +79,12 @@ class ContextInfo(TypedDict):
 def parse_json(response: Response) -> Any:
     """Decode a response body as JSON.
 
+    Args:
+        response: The HTTP response whose body to decode.
+
+    Returns:
+        The decoded JSON value (usually a `dict`).
+
     Raises:
         ResponseFormatError: if the body is not JSON (for example an HTML login
             page returned with status 200 by a proxy).
@@ -106,6 +112,12 @@ def parse_context_info(r: Any) -> ContextInfo:
     Falls back to SharePoint's 30-minute default when the lifetime is missing
     or not a positive integer.
 
+    Args:
+        r: The decoded `/_api/contextinfo` payload.
+
+    Returns:
+        A `ContextInfo` with the digest and its lifetime in seconds.
+
     Raises:
         ResponseFormatError: if the body is not an object or `FormDigestValue`
             is missing or not a non-empty string.
@@ -120,6 +132,12 @@ def parse_context_info(r: Any) -> ContextInfo:
 def parse_form_digest(r: Any) -> str:
     """Extract `FormDigestValue` from a `FormDigestResponse`.
 
+    Args:
+        r: The decoded `/_api/contextinfo` payload.
+
+    Returns:
+        The form digest value.
+
     Raises:
         ResponseFormatError: if the body is not an object or the value is
             missing or not a non-empty string.
@@ -130,6 +148,12 @@ def parse_form_digest(r: Any) -> str:
 def parse_item_type(r: Any) -> str:
     """Extract `ListItemEntityTypeFullName` from an `ItemTypeResponse`.
 
+    Args:
+        r: The decoded list metadata payload.
+
+    Returns:
+        The list item entity type full name, for example `SP.Data.TasksListItem`.
+
     Raises:
         ResponseFormatError: if the body is not an object or the value is
             missing or not a non-empty string.
@@ -139,6 +163,12 @@ def parse_item_type(r: Any) -> str:
 
 def parse_exists(r: Any) -> bool:
     """Extract the boolean `value` of an `.../Exists` response.
+
+    Args:
+        r: The decoded `.../Exists` payload.
+
+    Returns:
+        `True` if the resource exists, otherwise `False`.
 
     Raises:
         ResponseFormatError: if the body is not an object with a boolean `value`.
@@ -155,6 +185,12 @@ def parse_created_item(r: Any) -> dict[str, Any]:
 
     Accepts both the `nometadata` shape (flat object) and the `verbose` shape
     (`{"d": {...}}`).
+
+    Args:
+        r: The decoded add-item payload.
+
+    Returns:
+        The created item's fields, with `Id` set to its integer id (taken from `Id` or `ID`).
 
     Raises:
         ResponseFormatError: if the body is not an object or has no integer `Id`.
@@ -176,6 +212,12 @@ def parse_object(r: Any) -> dict[str, Any]:
     Accepts both the `nometadata` shape (flat object) and the `verbose` shape
     (`{"d": {...}}`).
 
+    Args:
+        r: The decoded object payload.
+
+    Returns:
+        The object's fields, unwrapped from `d` when present.
+
     Raises:
         ResponseFormatError: if the body is not an object.
     """
@@ -191,6 +233,12 @@ def parse_add_item(r: AddItemResponse) -> int:
     """Extract `ID` from an add-item response.
 
     Deprecated: use `parse_created_item`, which returns the whole item. Removed in 2.0.
+
+    Args:
+        r: The decoded add-item payload.
+
+    Returns:
+        The new item's `ID`.
 
     Raises:
         ResponseFormatError: if `ID` is missing.
@@ -211,6 +259,12 @@ def parse_add_document(r: AddDocumentResponse) -> str:
     """Extract `UniqueId` from an add-document response.
 
     Deprecated: use `parse_object`, which returns the whole `SP.File`. Removed in 2.0.
+
+    Args:
+        r: The decoded add-document payload.
+
+    Returns:
+        The new document's `UniqueId`.
 
     Raises:
         ResponseFormatError: if `UniqueId` is missing.
