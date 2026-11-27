@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -153,6 +153,6 @@ def parse_retry_after(value: str | None, now: datetime | None = None) -> float |
     except (TypeError, ValueError, IndexError):
         return None
     if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    now = now or datetime.now(timezone.utc)
+        when = when.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
     return max(0.0, (when - now).total_seconds())

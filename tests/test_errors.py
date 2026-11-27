@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from requests import HTTPError, Response
@@ -56,12 +56,12 @@ def test_parse_retry_after_seconds():
 
 
 def test_parse_retry_after_http_date():
-    now = datetime(2026, 10, 23, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
     assert parse_retry_after("Fri, 23 Oct 2026 12:00:30 GMT", now=now) == 30.0
 
 
 def test_parse_retry_after_past_date_is_zero():
-    now = datetime(2026, 10, 23, 12, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
     assert parse_retry_after("Fri, 23 Oct 2026 11:00:00 GMT", now=now) == 0.0
 
 

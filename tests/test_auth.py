@@ -169,7 +169,7 @@ def test_rewind_body_ignores_bytes():
 def _self_signed_der(algorithm: hashes.SHA256 | hashes.SHA384) -> bytes:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "sp.example.com")])
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SECURITY.md`: supported versions, private vulnerability reporting, and how sppyte handles
+  credentials, hosts, TLS and files.
+
+### Changed
+
+- Python 3.10 is no longer supported (it reached end of life); the minimum is now 3.11.
+  Python 3.15 is tested and declared. The PyPy classifier is removed, since CI does not test PyPy.
+
 ## [1.1.1] - 2026-10-23
 
 ### Added
@@ -180,6 +190,6 @@ First beta: the planned 1.0 feature set is complete.
 [1.0.0b2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0b1...v1.0.0b2
 [1.0.0b1]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a3...v1.0.0b1
 [1.0.0a3]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a2...v1.0.0a3
-[1.0.0a2]: https://github.com/B-Jones-RFD/sppyte/compare/v1.0.0a1...v1.0.0a2
-[1.0.0a1]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...v1.0.0a1
+[1.0.0a2]: https://github.com/B-Jones-RFD/sppyte/compare/1.0.0a1...v1.0.0a2
+[1.0.0a1]: https://github.com/B-Jones-RFD/sppyte/compare/v0.2.0...1.0.0a1
 [0.2.0]: https://github.com/B-Jones-RFD/sppyte/compare/v0.1.7...v0.2.0

@@ -38,3 +38,10 @@ env/
 
 # mkdocs output
 site/
+
+# Secrets
+.env
+.env.*
+
+# Local working notes
+.briefs/
